@@ -1,0 +1,14 @@
+.git export-ignore
+.superpowers export-ignore
+node_modules export-ignore
+.pnpm-store export-ignore
+.pnpm-config export-ignore
+dist export-ignore
+apps/web/dist export-ignore
+.env export-ignore
+.env.* export-ignore
+*.sqlite export-ignore
+*.sqlite-* export-ignore
+*.db export-ignore
+*.pem export-ignore
+*.key export-ignore

@@ -1,0 +1,30 @@
+services:
+  review:
+    build:
+      context: .
+      args:
+        REVIEW_UID: ${REVIEW_UID:-10001}
+        REVIEW_GID: ${REVIEW_GID:-10001}
+    image: agent-review:local
+    ports:
+      - "127.0.0.1:7373:7373"
+    command:
+      [
+        "${REVIEW_REPO:?Set REVIEW_REPO to the absolute repository path}",
+        "--no-open",
+      ]
+    volumes:
+      - type: bind
+        source: ${REVIEW_REPO:?Set REVIEW_REPO to the absolute repository path}
+        target: ${REVIEW_REPO:?Set REVIEW_REPO to the absolute repository path}
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: volume
+        source: review-state
+        target: /state
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+volumes:
+  review-state:

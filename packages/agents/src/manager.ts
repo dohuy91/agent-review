@@ -66,6 +66,12 @@ export class AgentManager {
         .all(id) as { metadata: string }[]
     ).map((r) => JSON.parse(r.metadata));
   }
+  hasActive(repositoryId: string): boolean {
+    return [...this.sessions.values()].some(
+      (session) =>
+        !session.exited && session.run.target.repositoryId === repositoryId,
+    );
+  }
   get(repositoryId: string, id: string) {
     const row = this.store.db
       .prepare("SELECT metadata FROM agent_runs WHERE repository_id=? AND id=?")

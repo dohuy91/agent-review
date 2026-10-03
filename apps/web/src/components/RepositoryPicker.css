@@ -1,0 +1,105 @@
+.repository-picker {
+  width: min(600px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+.repository-picker header h2 {
+  margin: 0 0 8px;
+}
+.repository-picker header p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.repository-picker-location {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+.repository-picker-location select {
+  width: 100%;
+  min-width: 0;
+}
+.repository-picker-path {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.repository-picker-path button {
+  flex-shrink: 0;
+}
+.repository-picker-path output {
+  overflow-wrap: anywhere;
+  font-family: monospace;
+  font-size: 12px;
+}
+.repository-picker-folders {
+  list-style: none;
+  padding: 4px;
+  margin: 0;
+  min-height: 130px;
+  max-height: min(40vh, 330px);
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.repository-picker-folders li + li {
+  margin-top: 2px;
+}
+.repository-picker-folders li button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px;
+  text-align: left;
+  white-space: normal;
+  border: 0;
+  background: transparent;
+}
+.repository-picker-folders li button:hover:not(:disabled) {
+  background: var(--blue);
+}
+.repository-picker-folders li button span:first-of-type {
+  flex: 1;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.repository-picker-folders li button svg {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+.repository-picker-folders .repository-picker-empty {
+  color: var(--muted);
+  padding: 32px 12px;
+  text-align: center;
+}
+.repository-picker-notice {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.repository-picker-error {
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--danger, #c94040);
+  border-radius: 6px;
+}
+.repository-picker-error p {
+  margin: 0 0 6px;
+  overflow-wrap: anywhere;
+}
+.repository-picker footer {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 14px;
+}

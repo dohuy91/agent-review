@@ -21,7 +21,7 @@ export default function AgentPanel({
   reviewId,
   comments,
   profile,
-  onProfile,
+  onOpenProfiles,
   onDialogChange,
   readOnly = false,
 }: {
@@ -29,7 +29,8 @@ export default function AgentPanel({
   reviewId: string;
   comments: AttachedComment[];
   profile: ProfilesResponse | null;
-  onProfile: (p: ProfilesResponse) => void;
+  onProfile?: (p: ProfilesResponse) => void;
+  onOpenProfiles?: () => void;
   onDialogChange?: (open: boolean) => void;
   readOnly?: boolean;
 }) {
@@ -142,25 +143,6 @@ export default function AgentPanel({
     };
     return () => stream.close();
   }, [run?.id, run?.status, prefix]);
-  async function choose(locator: string) {
-    const g = generation.current;
-    setBusy(true);
-    setConfirmation(null);
-    try {
-      const skill = skills.find((s) => s.locator === locator);
-      if (!skill) return;
-      const p = await api<ProfilesResponse>(`${prefix}/profiles`, "PUT", {
-        reviewId,
-        scope: "worktree",
-        profile: { locator: skill.locator, digest: skill.digest },
-      });
-      if (g === generation.current) onProfile(p);
-    } catch (e) {
-      if (g === generation.current) setError((e as Error).message);
-    } finally {
-      if (g === generation.current) setBusy(false);
-    }
-  }
   async function prepare() {
     const frozenProviderLabel = providerLabel;
     const g = generation.current;
@@ -258,22 +240,22 @@ export default function AgentPanel({
           ))}
         </select>
       </label>
-      <label>
-        Installed skill
-        <select
-          aria-label="Installed skill"
-          value={exact ? profile?.effective?.locator : ""}
-          disabled={busy || readOnly}
-          onChange={(e) => void choose(e.target.value)}
-        >
-          <option value="">Select exact skill</option>
-          {skills.map((s) => (
-            <option key={s.locator} value={s.locator}>
-              {s.name}
-            </option>
-          ))}
-        </select>
-      </label>
+      <div className="effective-skill" aria-label="Effective fix skill">
+        <small>Fix skill</small>
+        <span title={profile?.effective?.locator}>
+          {profile?.effective?.locator || "No profile configured"}
+        </span>
+        <small>
+          {profile?.source
+            ? `${profile.source} · revision ${profile.revision}`
+            : "Choose a skill in Fix profiles"}
+        </small>
+        {onOpenProfiles && (
+          <button disabled={busy || readOnly} onClick={onOpenProfiles}>
+            Edit fix profile
+          </button>
+        )}
+      </div>
       {adapter === "opencode" && (
         <small>
           OpenCode sends the prompt in argv, visible in the local process list.
@@ -311,7 +293,9 @@ export default function AgentPanel({
         </small>
       )}
       {!exact && (
-        <small>Select an installed skill with the exact digest.</small>
+        <small>
+          Configure an installed skill with the exact digest in Fix profiles.
+        </small>
       )}
       <button
         ref={sendButton}

@@ -1,9 +1,10 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import type {
   Repository,
   ReviewObservation,
   ReviewMode,
   ReviewHistoryEntry,
+  RepositoryContext,
 } from "../../../../packages/shared/src/index.js";
 import {
   getReview,
@@ -14,6 +15,7 @@ import {
 } from "../../../../packages/git/src/review.js";
 import { getFileDiff } from "../../../../packages/git/src/diff.js";
 import { executionStamp } from "../../../../packages/agents/src/target.js";
+import { validateIdentity } from "../../../../packages/git/src/mutations.js";
 export interface ReviewAccess {
   openHistorical(
     repositoryId: string,
@@ -34,7 +36,12 @@ export function installReviewRoutes(
   acceptObservation: (
     repositoryId: string,
     observation: ReviewObservation,
+    context?: RepositoryContext,
   ) => void = () => {},
+  acceptsContext: (
+    request: FastifyRequest,
+    repositoryId: string,
+  ) => boolean = () => true,
 ): ReviewAccess {
   const observations = new Map<string, ReviewObservation>();
   const executionStamps = new Map<string, string | null>();
@@ -62,15 +69,23 @@ export function installReviewRoutes(
       return observation;
     },
     async validateExecution(repositoryId, reviewId) {
-      const { repository: repo } = await access.getObservation(
+      const { repository: repo, observation } = await access.getObservation(
         repositoryId,
         reviewId,
       );
       const expected = executionStamps.get(reviewId);
-      if (!expected) throw new StaleReviewError();
+      if (
+        !expected ||
+        observation.historical ||
+        observation.executionEligible === false
+      )
+        throw new StaleReviewError();
       try {
         if ((await executionStamp(repo)) !== expected)
           throw new StaleReviewError();
+        // getObservation validated repository identity before the stamp. Recheck
+        // the actual checkout at the end because the selected target can differ.
+        await validateIdentity(repo, observation);
       } catch {
         throw new StaleReviewError();
       }
@@ -99,12 +114,14 @@ export function installReviewRoutes(
     Querystring: {
       base?: string;
       mode?: string;
+      target?: string;
     };
   }>("/api/repositories/:id/review", async (req, reply) => {
-    const { base, mode } = req.query;
+    const { base, mode, target } = req.query;
     if (
       typeof base !== "string" ||
       typeof mode !== "string" ||
+      (target !== undefined && (typeof target !== "string" || !target)) ||
       !["branch", "working", "staged", "full"].includes(mode)
     )
       return reply
@@ -120,14 +137,27 @@ export function installReviewRoutes(
         }
       };
       const stamp = await capture();
-      const observation = await getReview(registered, base, mode as ReviewMode);
+      const observation = await getReview(
+        registered,
+        base,
+        mode as ReviewMode,
+        target,
+      );
       const after = await capture();
       // Unverifiable execution state does not block Git-object read review.
       executionStamps.set(
         observation.id,
-        stamp && stamp === after ? stamp : null,
+        observation.executionEligible !== false && stamp && stamp === after
+          ? stamp
+          : null,
       );
-      acceptObservation(observation.repositoryId, observation);
+      acceptObservation(
+        observation.repositoryId,
+        observation,
+        acceptsContext(req, registered.id)
+          ? { base, mode: mode as ReviewMode, target: target ?? null }
+          : undefined,
+      );
       observations.set(observation.id, observation);
       while (observations.size > 128) {
         const oldest = observations.keys().next().value!;

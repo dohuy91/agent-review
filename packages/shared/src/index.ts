@@ -7,11 +7,30 @@ export interface Repository {
   head: string;
   projectId: string;
 }
+export interface RepositoryRestoreError {
+  root: string;
+  error: string;
+}
+export interface RepositoryContext {
+  base: string;
+  mode: ReviewMode;
+  /** Exact selected local ref; absent/null follows the checked-out HEAD. */
+  target?: string | null;
+}
+export interface RepositorySelectionResult {
+  ok: true;
+  accepted?: boolean;
+  navigationRevision?: number;
+}
 export interface RepositoriesResponse {
+  navigationRevision?: number;
+  contexts?: Record<string, RepositoryContext>;
+  errors?: RepositoryRestoreError[];
   repositories: Repository[];
   selectedRepositoryId: string | null;
   base: string | null;
   mode?: ReviewMode;
+  target?: string | null;
 }
 export interface APIError {
   error: string;
@@ -29,6 +48,9 @@ export interface ReviewFile {
   newOid: string | null;
   oldMode: string;
   newMode: string;
+  /** Display metadata only; absent in older snapshots, null when unavailable. */
+  addedLines?: number | null;
+  deletedLines?: number | null;
 }
 export interface ReviewObservation {
   historical?: boolean;
@@ -37,8 +59,16 @@ export interface ReviewObservation {
   fingerprint: string;
   base: string;
   mergeBase: string;
+  /** The compared target commit and branch, not necessarily the worktree HEAD. */
   head: string;
   branch: string | null;
+  targetRef?: string;
+  /** Original base expression, retained so moving live refs invalidate observations. */
+  baseRef?: string;
+  /** Actual checkout at capture time; comparison selection never checks it out. */
+  worktree?: { head: string; branch: string | null };
+  /** Display hint only. Every operation independently revalidates the actual checkout. */
+  executionEligible?: boolean;
   mode: ReviewMode;
   files: ReviewFile[];
 }
@@ -67,6 +97,8 @@ export interface FileDiff {
 }
 export interface BranchesResponse {
   branches: string[];
+  localBranches?: string[];
+  remoteBranches?: string[];
   current: string | null;
 }
 
@@ -98,6 +130,8 @@ export interface ReviewComment extends CommentInput {
   mergeBase: string;
   head: string;
   branch: string | null;
+  targetRef?: string;
+  baseRef?: string;
   reviewFingerprint: string;
   fileFingerprint: string;
   sourceOid: string | null;
@@ -140,6 +174,9 @@ export interface ReviewExport {
     commonDir: string;
     branch: string | null;
     head: string;
+    targetRef?: string;
+    baseRef?: string;
+    worktree?: { head: string; branch: string | null };
     base: string;
     mergeBase: string;
     mode: ReviewMode;
@@ -208,6 +245,9 @@ export interface ReviewHistoryEntry {
   mergeBase: string;
   head: string;
   branch: string | null;
+  targetRef?: string;
+  baseRef?: string;
+  worktree?: { head: string; branch: string | null };
   mode: ReviewMode;
   acceptedAt: string;
   fileCount: number;

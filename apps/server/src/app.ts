@@ -1,4 +1,9 @@
 import { installGitActionRoutes } from "./routes/git-actions.js";
+import { installPushRoutes } from "./routes/push.js";
+import { installBranchSwitchRoutes } from "./routes/branches.js";
+import { installDirectoryRoutes } from "./routes/directories.js";
+import { DirectoryBrowser } from "./directory-browser.js";
+import { RepositoryQueue } from "../../../packages/git/src/mutations.js";
 import { installWatchRoutes } from "./routes/watch.js";
 import Fastify from "fastify";
 import { ReviewStore } from "../../../packages/review/src/store.js";
@@ -10,6 +15,8 @@ import { mkdir, access, realpath } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { installReviewRoutes } from "./routes/reviews.js";
 import { installSecurity } from "./security.js";
+import { NavigationState } from "./navigation.js";
+import { RegistrationStore } from "./registration.js";
 import { registerRepository, validateBase } from "./registry.js";
 import type {
   Repository,
@@ -21,10 +28,13 @@ import type { ProcessFactory } from "../../../packages/agents/src/adapters.js";
 export interface AppOptions {
   /** Internal fixture seam; never a launch or HTTP option. */
   fetchTransport?: import("../../../packages/git/src/remotes.js").FetchTransport;
+  /** Internal fixture seam; never a launch or HTTP option. */
+  pushTransport?: import("../../../packages/git/src/push.js").PushTransport;
   /** Internal fixture seam, never exposed through launch options or HTTP. */
   agentAvailability?: typeof import("../../../packages/agents/src/adapters.js").codexAvailability;
   adapterAvailability?: typeof import("../../../packages/agents/src/adapters.js").adapterAvailability;
   container?: boolean;
+  browseRoots?: string[];
   skillRoots?: string[];
   enableWrites?: boolean;
   processFactory?: ProcessFactory;
@@ -55,28 +65,119 @@ export async function createApp(options: AppOptions) {
     )
       throw new Error("Review state must be outside reviewed roots");
   }
+  const directoryBrowser = await DirectoryBrowser.create({
+    repositoryPath: options.repositoryPath,
+    browseRoots: options.browseRoots,
+    container: options.container,
+    excludedPaths: [canonicalDataDir],
+  });
   const app = Fastify({ logger: false, bodyLimit: 16 * 1024 });
   await app.register(cookie);
   installSecurity(app, options.port, options.token);
-  const repositories = new Map<string, Repository>();
-  let selectedRepositoryId: string | null = null;
+  installDirectoryRoutes(app, directoryBrowser);
+  const navigation = new NavigationState(app);
+  const store = new ReviewStore(canonicalDataDir);
+  app.addHook("onClose", async () => store.close());
+  const registration = new RegistrationStore(store.db);
+  const restored = await registration.restore(validateDataLocation);
+  const repositories = new Map<string, Repository>(
+    restored.repositories.map((repo) => [repo.id, repo]),
+  );
+  let selectedRepositoryId: string | null = registration.selected();
+  if (!selectedRepositoryId || !repositories.has(selectedRepositoryId))
+    selectedRepositoryId = restored.repositories[0]?.id ?? null;
   let base: string | null = options.base ?? null;
   if (options.repositoryPath) {
-    const repo = await registerRepository(options.repositoryPath);
-    validateDataLocation(repo);
-    if (options.base) await validateBase(repo.root, options.base);
-    repositories.set(repo.id, repo);
-    selectedRepositoryId = repo.id;
+    try {
+      const repo = await registerRepository(options.repositoryPath);
+      validateDataLocation(repo);
+      if (options.base) await validateBase(repo.root, options.base);
+      await registration.save(repo);
+      registration.select(repo.id);
+      repositories.set(repo.id, repo);
+      selectedRepositoryId = repo.id;
+      restored.errors = restored.errors.filter(
+        (error) => error.root !== repo.root,
+      );
+    } catch (error) {
+      await app.close();
+      throw error;
+    }
   }
+  const initialContext = selectedRepositoryId
+    ? registration.context(selectedRepositoryId)
+    : null;
+  base = options.base ?? initialContext?.base ?? base;
+  let mode = options.mode ?? initialContext?.mode ?? "full";
+  // Explicit launch flags describe the actual worktree; otherwise restore the accepted comparison target.
+  let target =
+    options.base !== undefined || options.mode !== undefined
+      ? null
+      : (initialContext?.target ?? null);
   app.get("/api/repositories", async (): Promise<RepositoriesResponse> => ({
     repositories: [...repositories.values()],
+    errors: restored.errors,
     selectedRepositoryId,
+    navigationRevision: navigation.revision,
     base,
-    mode: options.mode ?? "full",
+    mode,
+    target,
+    contexts: Object.fromEntries(
+      [...repositories.keys()].flatMap((id) => {
+        const context = registration.context(id);
+        return context ? [[id, context]] : [];
+      }),
+    ),
   }));
+  app.put<{ Params: { id: string } }>(
+    "/api/repositories/:id/selection",
+    async (req, reply) => {
+      if (
+        !req.body ||
+        typeof req.body !== "object" ||
+        Array.isArray(req.body) ||
+        Object.keys(req.body).length
+      )
+        return reply
+          .code(400)
+          .send({ error: "Selection request must be empty" });
+      const repo = repositories.get(req.params.id);
+      if (!repo)
+        return reply.code(404).send({ error: "Repository is not registered" });
+      if (!navigation.current(req))
+        return {
+          ok: true,
+          accepted: false,
+          navigationRevision: navigation.revision,
+        };
+      if (selectedRepositoryId !== repo.id) {
+        const previous = repositories.get(selectedRepositoryId ?? "");
+        const context = registration.context(repo.id);
+        base =
+          context?.base ??
+          (previous?.projectId === repo.projectId ? base : null);
+        mode = context?.mode ?? "full";
+        target = context?.target ?? null;
+      }
+      registration.select(repo.id);
+      selectedRepositoryId = repo.id;
+      return {
+        ok: true,
+        accepted: true,
+        navigationRevision: navigation.revision,
+      };
+    },
+  );
   app.post("/api/repositories", async (req, reply) => {
     const body = req.body as { path?: unknown } | null;
-    if (typeof body?.path !== "string" || !body.path) {
+    if (
+      !body ||
+      typeof body !== "object" ||
+      Array.isArray(body) ||
+      Object.keys(body).some((key) => key !== "path") ||
+      typeof body.path !== "string" ||
+      !body.path
+    ) {
       return reply
         .code(400)
         .send({ error: "Explicit repository path required" });
@@ -84,14 +185,24 @@ export async function createApp(options: AppOptions) {
     try {
       const repo = await registerRepository(body.path);
       validateDataLocation(repo);
-      const previous = selectedRepositoryId
-        ? repositories.get(selectedRepositoryId)
-        : undefined;
-      if (previous?.projectId !== repo.projectId) {
-        base = null;
-      }
+      await registration.save(repo);
       repositories.set(repo.id, repo);
-      selectedRepositoryId = repo.id;
+      // Versioned browser registration is inventory-only. Its current client
+      // performs selection separately, so dismissal cannot change durable navigation.
+      if (!navigation.versioned(req) && navigation.current(req)) {
+        const previous = repositories.get(selectedRepositoryId ?? "");
+        const context = registration.context(repo.id);
+        base =
+          context?.base ??
+          (previous?.projectId === repo.projectId ? base : null);
+        mode = context?.mode ?? "full";
+        target = context?.target ?? null;
+        registration.select(repo.id);
+        selectedRepositoryId = repo.id;
+      }
+      restored.errors = restored.errors.filter(
+        (error) => error.root !== repo.root,
+      );
       return repo;
     } catch {
       return reply.code(400).send({
@@ -99,17 +210,47 @@ export async function createApp(options: AppOptions) {
       });
     }
   });
-  const store = new ReviewStore(canonicalDataDir);
   const reviewAccess = installReviewRoutes(
     app,
     repositories,
-    (id, observation) => store.acceptObservation(id, observation),
+    (id, observation, context) => {
+      store.acceptObservation(id, observation);
+      if (context && !observation.historical) {
+        registration.saveContext(id, context);
+        if (id === selectedRepositoryId) {
+          base = context.base;
+          mode = context.mode;
+          target = context.target ?? null;
+        }
+      }
+    },
+    (req, id) => navigation.acceptsContext(req, id),
   );
-  app.addHook("onClose", async () => store.close());
-  installAgentRoutes(app, repositories, reviewAccess, store, options);
+  const queue = new RepositoryQueue();
+  const agentAccess = installAgentRoutes(
+    app,
+    repositories,
+    reviewAccess,
+    store,
+    { ...options, queue },
+  );
   installCommentRoutes(app, repositories, reviewAccess, store);
   installWatchRoutes(app, repositories);
-  installGitActionRoutes(app, repositories, reviewAccess, options);
+  installGitActionRoutes(app, repositories, reviewAccess, {
+    ...options,
+    queue,
+  });
+  installPushRoutes(app, repositories, reviewAccess, { ...options, queue });
+  installBranchSwitchRoutes(app, repositories, reviewAccess, {
+    ...options,
+    queue,
+    assertIdle: async (id) => {
+      if (agentAccess.hasActive(id))
+        throw Object.assign(new Error("An agent is still active"), {
+          statusCode: 409,
+        });
+    },
+  });
   app.setErrorHandler((error, _req, reply) => {
     const status = (error as { statusCode?: number }).statusCode ?? 500;
     return reply

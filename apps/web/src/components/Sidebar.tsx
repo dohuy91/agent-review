@@ -1,58 +1,89 @@
 import React from "react";
-import type { Repository } from "../../../../packages/shared/src/index.js";
+import type {
+  Repository,
+  RepositoryRestoreError,
+  ReviewFile,
+  AttachedComment,
+} from "../../../../packages/shared/src/index.js";
+import ChangedFileTree from "./ChangedFileTree.js";
 export default function Sidebar({
   repositories,
   selected,
   onSelect,
-  branches,
-  onBase,
+  files,
+  selectedPath,
+  reviewed,
+  comments,
+  onSelectFile,
+  loading,
   onClose,
+  errors = [],
 }: {
   repositories: Repository[];
   selected: string;
   onSelect: (id: string) => void;
-  branches: string[];
-  onBase: (b: string) => void;
+  files: ReviewFile[];
+  selectedPath: string;
+  reviewed: Set<string>;
+  comments: AttachedComment[];
+  onSelectFile: (path: string) => void;
+  loading?: boolean;
   onClose: () => void;
+  errors?: RepositoryRestoreError[];
 }) {
   return (
-    <aside className="sidebar">
-      <div className="panel-heading">
-        PROJECTS{" "}
-        <button className="mobile-close" onClick={onClose}>
+    <aside
+      className="sidebar"
+      id="project-pane"
+      aria-label="Changed file navigation"
+    >
+      <div className="sidebar-repository">
+        <label htmlFor="registered-worktree">Repository / Project</label>
+        <button
+          className="mobile-close"
+          aria-label="Close changed files"
+          onClick={onClose}
+        >
           ×
         </button>
-      </div>
-      {repositories.map((r) => (
-        <div key={r.id}>
-          <button
-            className={`project ${selected === r.id ? "active" : ""}`}
-            onClick={() => onSelect(r.id)}
+        <select
+          id="registered-worktree"
+          aria-label="Registered worktree"
+          value={selected}
+          title={repositories.find((r) => r.id === selected)?.root}
+          onChange={(event) => onSelect(event.target.value)}
+        >
+          {repositories.map((r) => (
+            <option key={r.id} value={r.id}>
+              {r.root.split("/").pop()} · {r.root}
+            </option>
+          ))}
+        </select>
+        {repositories.find((r) => r.id === selected)?.root && (
+          <small
+            className="repository-path"
+            title={repositories.find((r) => r.id === selected)?.root}
           >
-            ▣{" "}
-            <span>
-              {r.root.split("/").pop()}
-              <small>{r.root}</small>
-            </span>
-          </button>
-          {selected === r.id && (
-            <div className="branch-list">
-              <div className="subheading">LOCAL BRANCHES / BASE</div>
-              {branches.map((b) => (
-                <button key={b} onClick={() => onBase(b)}>
-                  ⑂ {b}
-                  {b === r.branch && <small>current</small>}
-                </button>
-              ))}
-            </div>
-          )}
+            {repositories.find((r) => r.id === selected)?.root}
+          </small>
+        )}
+      </div>
+      <ChangedFileTree
+        key={selected}
+        files={files}
+        selected={selectedPath}
+        reviewed={reviewed}
+        comments={comments}
+        loading={loading}
+        onSelect={onSelectFile}
+      />
+      {errors.map((item) => (
+        <div className="registration-error" role="alert" key={item.root}>
+          <strong>Unavailable repository</strong>
+          <span>{item.root}</span>
+          <small>{item.error}</small>
         </div>
       ))}
-      <div className="sidebar-foot">
-        LOCAL REVIEW
-        <br />
-        <small>Your code stays on this computer</small>
-      </div>
     </aside>
   );
 }

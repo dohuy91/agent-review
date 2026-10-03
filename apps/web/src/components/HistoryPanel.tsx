@@ -11,7 +11,12 @@ export default function HistoryPanel({
 }: {
   repositoryId: string;
   reviewId: string;
-  onSelect: (base: string, mode: ReviewMode, historyId?: string) => void;
+  onSelect: (
+    base: string,
+    mode: ReviewMode,
+    historyId?: string,
+    targetRef?: string,
+  ) => void;
 }) {
   const [history, setHistory] = useState<HistoryResponse | null>(null),
     [error, setError] = useState("");
@@ -44,9 +49,16 @@ export default function HistoryPanel({
         <div key={r.id}>
           <button
             onClick={() =>
-              r.mode === "branch"
-                ? onSelect(r.base, r.mode, r.id)
-                : onSelect(r.base, r.mode)
+              r.targetRef
+                ? onSelect(
+                    r.baseRef ?? r.base,
+                    r.mode,
+                    r.mode === "branch" ? r.id : undefined,
+                    r.targetRef,
+                  )
+                : r.mode === "branch"
+                  ? onSelect(r.base, r.mode, r.id)
+                  : onSelect(r.base, r.mode)
             }
           >
             {r.mode} · {r.branch || "detached"} · {r.head.slice(0, 8)} ·{" "}

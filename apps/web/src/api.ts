@@ -2,11 +2,15 @@ export async function api<T>(
   path: string,
   method = "GET",
   body?: unknown,
+  headers: Record<string, string> = {},
 ): Promise<T> {
   const response = await fetch("/api" + path, {
     method,
     credentials: "same-origin",
-    headers: body === undefined ? {} : { "Content-Type": "application/json" },
+    headers: {
+      ...headers,
+      ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+    },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
   if (!response.ok) {

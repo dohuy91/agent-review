@@ -9,7 +9,8 @@
     "build": "pnpm --filter @agent-review/web build",
     "start": "node --import tsx apps/server/src/cli.ts",
     "demo": "node scripts/create-demo.mjs",
-    "package:source": "node scripts/package-source.mjs"
+    "package:source": "node scripts/package-source.mjs",
+    "smoke:native": "node scripts/native-smoke.mjs"
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.2",

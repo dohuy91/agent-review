@@ -44,6 +44,9 @@ export class GitActionError extends Error {
 export type Revalidate = () => Promise<void>;
 export class RepositoryQueue {
   private pending = new Map<string, Promise<unknown>>();
+  isBusy(id: string) {
+    return this.pending.has(id);
+  }
   async run<T>(id: string, action: () => Promise<T>): Promise<T> {
     const previous = this.pending.get(id) ?? Promise.resolve();
     const result = previous.catch(() => {}).then(action);
@@ -99,6 +102,79 @@ export async function writeGit(
     objects: true,
     ...(args[0] === "update-ref" ? { branch: args.at(-3)! } : {}),
   });
+  return executeWriteGit(repo, args, input, index);
+}
+/** Narrow checkout/stash porcelain. Callers must validate a one-use, clean or explicitly
+ * approved save plan immediately before entry. No HTTP argv reaches this boundary. */
+export async function writeBranchGit(
+  repo: Repository,
+  args: string[],
+): Promise<Buffer> {
+  const switching =
+    args.length === 6 &&
+    args.slice(0, 5).join("\0") ===
+      [
+        "switch",
+        "--no-guess",
+        "--no-recurse-submodules",
+        "--no-overwrite-ignore",
+        "--",
+      ].join("\0") &&
+    !!args[5] &&
+    !args[5].startsWith("-") &&
+    !/[\x00-\x20\x7f]/.test(args[5]);
+  const stashing =
+    args.length === 5 &&
+    args.slice(0, 4).join("\0") ===
+      ["stash", "push", "--include-untracked", "--message"].join("\0") &&
+    /^agent-review branch switch [0-9a-f-]{36} from refs\/heads\//.test(
+      args[4]!,
+    ) &&
+    !/[\x00-\x1f\x7f]/.test(args[4]!) &&
+    args[4]!.length <= 4300;
+  if (!switching && !stashing)
+    throw new GitActionError("Unsupported branch operation");
+  if (switching)
+    await git(repo.root, ["check-ref-format", `refs/heads/${args[5]}`]);
+  await validateWriteDestinations(repo, { objects: stashing });
+  return executeWriteGit(
+    repo,
+    args,
+    undefined,
+    undefined,
+    [
+      "-c",
+      "submodule.recurse=false",
+      "-c",
+      "gc.auto=0",
+      "-c",
+      "maintenance.auto=false",
+      "-c",
+      "core.warnAmbiguousRefs=true",
+      "-c",
+      "stash.showStat=false",
+      "-c",
+      "stash.showPatch=false",
+      "-c",
+      "core.trustctime=true",
+      "-c",
+      "core.checkStat=default",
+      "-c",
+      "core.ignoreStat=false",
+      "-c",
+      "core.fileMode=true",
+    ],
+    !stashing,
+  );
+}
+async function executeWriteGit(
+  repo: Repository,
+  args: string[],
+  input?: Buffer,
+  index?: string,
+  additional: string[] = [],
+  literalPathspecs = true,
+): Promise<Buffer> {
   // update-index may inspect racily-clean worktree entries while writing. Disable
   // every effective filter driver, even though our selected blob uses --no-filters.
   let keys = "";
@@ -141,11 +217,24 @@ export async function writeGit(
     GIT_LITERAL_PATHSPECS: "1",
     GIT_OPTIONAL_LOCKS: "0",
   });
+  // Git stash itself builds :(literal) pathspecs for saved untracked files.
+  // An inherited global literal override makes that safe internal clean a no-op.
+  // This fixed stash invocation accepts no caller-supplied paths or pathspecs.
+  if (!literalPathspecs) delete env.GIT_LITERAL_PATHSPECS;
   if (index) env.GIT_INDEX_FILE = index;
   return new Promise((resolve, reject) => {
     const child = execFile(
       "git",
-      [...prefix, ...filters, "-C", repo.root, ...args],
+      [
+        ...prefix.filter(
+          (arg) => literalPathspecs || arg !== "--literal-pathspecs",
+        ),
+        ...filters,
+        ...additional,
+        "-C",
+        repo.root,
+        ...args,
+      ],
       {
         encoding: "buffer",
         shell: false,

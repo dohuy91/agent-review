@@ -1,0 +1,132 @@
+.changed-file-tree {
+  min-width: 0;
+  padding: 10px 8px 20px;
+}
+.changed-tree-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 7px;
+}
+.changed-tree-heading h2 {
+  flex: 1;
+  margin: 0;
+  font-size: 11px;
+  font-weight: 650;
+}
+.changed-tree-heading > span {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+.changed-tree-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 2px 7px 10px;
+  font-size: 10px;
+  color: var(--muted);
+}
+.changed-tree-toolbar select {
+  padding: 3px 4px;
+  max-width: 108px;
+  color: inherit;
+}
+.changed-tree-items {
+  min-width: 0;
+}
+.changed-tree-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  min-width: 0;
+  min-height: 31px;
+  padding: 5px 5px 5px min(calc(5px + (var(--tree-level) - 1) * 11px), 45px);
+  text-align: left;
+  border-radius: 4px;
+}
+.changed-tree-row.active {
+  background: var(--blue);
+  color: var(--accent);
+}
+.changed-tree-folder {
+  color: #657183;
+  font-weight: 550;
+}
+.changed-tree-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  flex: 0 0 14px;
+}
+.changed-tree-icon .status {
+  margin: 0;
+  font-size: 9px;
+}
+.changed-tree-name {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 2px;
+}
+.changed-tree-name > span,
+.changed-tree-name > small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.changed-tree-name > small {
+  font-size: 9px;
+  font-weight: 400;
+}
+.changed-tree-counts {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.changed-tree-added {
+  color: #278345;
+}
+.changed-tree-deleted {
+  color: #b7444e;
+}
+.changed-tree-unknown {
+  color: var(--muted);
+}
+.changed-tree-badges {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 4px;
+  font-size: 10px;
+}
+.changed-tree-comment {
+  color: var(--muted);
+}
+.changed-tree-kind {
+  max-width: 65px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px 3px;
+  color: #657183;
+  font-size: 9px;
+}
+.changed-tree-reviewed {
+  color: #278345;
+}
+.changed-tree-message {
+  padding: 6px 7px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}

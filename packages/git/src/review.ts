@@ -6,9 +6,10 @@ import type {
   ReviewObservation,
   ReviewFile,
   ReviewHistoryEntry,
+  BranchesResponse,
 } from "../../shared/src/index.js";
 import { fingerprint } from "../../review/src/fingerprint.js";
-import { git, gitText, safeStat } from "./git.js";
+import { git, gitText, readWorktree, safeStat } from "./git.js";
 import {
   validateBase,
   registerRepository,
@@ -20,12 +21,38 @@ export class StaleReviewError extends Error {
   }
 }
 const modes = ["branch", "working", "staged", "full"];
-async function observe(
-  repo: Repository,
-  base: string,
-  mode: ReviewMode,
-  historic?: Pick<ReviewHistoryEntry, "head" | "mergeBase" | "branch">,
-): Promise<Omit<ReviewObservation, "id">> {
+type LineCounts = { addedLines: number | null; deletedLines: number | null };
+function parseNumstat(buffer: Buffer): Map<string, LineCounts> {
+  const records = buffer.toString("utf8").split("\0");
+  const counts = new Map<string, LineCounts>();
+  for (let i = 0; i < records.length && records[i];) {
+    const record = records[i++]!;
+    // Paths may contain tabs and newlines. Only the first two tabs delimit
+    // counters; -z emits renames as an empty path followed by two NUL paths.
+    const first = record.indexOf("\t"),
+      second = record.indexOf("\t", first + 1);
+    if (first < 0 || second < 0) continue;
+    let path = record.slice(second + 1);
+    if (!path) {
+      i++; // Original rename/copy path.
+      path = records[i++] ?? "";
+    }
+    if (!path) continue;
+    const added = record.slice(0, first),
+      deleted = record.slice(first + 1, second);
+    const numeric =
+      /^\d+$/.test(added) &&
+      /^\d+$/.test(deleted) &&
+      Number.isSafeInteger(Number(added)) &&
+      Number.isSafeInteger(Number(deleted));
+    counts.set(path, {
+      addedLines: numeric ? Number(added) : null,
+      deletedLines: numeric ? Number(deleted) : null,
+    });
+  }
+  return counts;
+}
+async function currentRepository(repo: Repository): Promise<Repository> {
   try {
     // Resolve identity through the same safe Git boundary used at registration.
     // Identical endpoints do not authorize a rebound Git directory/worktree.
@@ -37,13 +64,69 @@ async function observe(
       )
     )
       throw new StaleReviewError();
+    return current;
   } catch {
     throw new StaleReviewError();
   }
+}
+async function localTarget(repo: Repository, target: string): Promise<string> {
+  if (!target.startsWith("refs/heads/") || target.length > 4096)
+    throw new Error("Target must be an exact local branch ref");
+  await git(repo.root, ["check-ref-format", target]);
+  const refs = (
+    await gitText(repo.root, [
+      "for-each-ref",
+      "--format=%(refname)%00%(objectname)%00%(objecttype)%00%(symref)",
+      target,
+    ])
+  )
+    .split("\n")
+    .map((line) => line.split("\0"));
+  const ref = refs.find(([name]) => name === target);
+  // Do not accept rev expressions, ambiguous shorthand, or symbolic local aliases.
+  if (
+    !ref ||
+    ref[2] !== "commit" ||
+    ref[3] ||
+    !/^[0-9a-f]{40,64}$/.test(ref[1]!)
+  )
+    throw new Error("Target must be an existing direct local branch");
+  return ref[1]!;
+}
+async function observe(
+  repo: Repository,
+  base: string,
+  mode: ReviewMode,
+  targetRef?: string,
+  historic?: Pick<
+    ReviewHistoryEntry,
+    "head" | "mergeBase" | "branch" | "targetRef" | "baseRef" | "worktree"
+  >,
+  includeCounts = true,
+): Promise<Omit<ReviewObservation, "id">> {
+  const current = await currentRepository(repo);
   if (!modes.includes(mode)) throw new Error("Invalid review mode");
   const head =
     historic?.head ??
-    (await gitText(repo.root, ["rev-parse", "--verify", "HEAD^{commit}"]));
+    (targetRef === undefined
+      ? current.head
+      : await localTarget(repo, targetRef));
+  const branch = historic ? historic.branch : (targetRef ?? current.branch);
+  const worktree = historic?.worktree ?? {
+    head: current.head,
+    branch: current.branch,
+  };
+  const executionEligible =
+    !historic && branch === current.branch && head === current.head;
+  if (
+    !historic &&
+    mode !== "branch" &&
+    targetRef !== undefined &&
+    !executionEligible
+  )
+    throw new Error(
+      "Mutable review modes require the checked-out target branch",
+    );
   if (historic) {
     if (
       mode !== "branch" ||
@@ -61,11 +144,6 @@ async function observe(
   const mergeBase =
     historic?.mergeBase ??
     (await gitText(repo.root, ["merge-base", resolved, head]));
-  let branch: null | string = null;
-  try {
-    branch = await gitText(repo.root, ["symbolic-ref", "--quiet", "HEAD"]);
-  } catch {}
-  if (historic) branch = historic.branch;
   const args = [
     "diff",
     "--no-ext-diff",
@@ -174,37 +252,85 @@ async function observe(
       f,
       index,
       statIdentity,
+      ...(targetRef === undefined ? [] : [targetRef]),
     ]);
   }
   files.sort((a, b) => a.path.localeCompare(b.path));
+  // Keep display-only counters out of all existing file/review identities so
+  // previously accepted marks, comments, and historical snapshots remain valid.
+  const observationFingerprint = fingerprint([
+    repo.id,
+    mode,
+    resolved,
+    mergeBase,
+    head,
+    branch,
+    files,
+    index,
+    stats,
+    ...(targetRef === undefined ? [] : [targetRef]),
+  ]);
+  if (includeCounts) {
+    const counts = parseNumstat(
+      await git(
+        repo.root,
+        args.map((arg) => (arg === "--raw" ? "--numstat" : arg)),
+      ),
+    );
+    for (const file of files) {
+      let count: LineCounts = { addedLines: null, deletedLines: null };
+      if (file.kind === "text") {
+        count = counts.get(file.path) ?? count;
+        if (
+          !counts.has(file.path) &&
+          file.status === "A" &&
+          !file.oldOid &&
+          !file.newOid &&
+          (mode === "working" || mode === "full")
+        ) {
+          try {
+            const content = await readWorktree(repo.root, file.path);
+            if (content && !content.includes(0)) {
+              let lines = 0;
+              for (const byte of content) if (byte === 10) lines++;
+              if (content.length && content.at(-1) !== 10) lines++;
+              count = { addedLines: lines, deletedLines: 0 };
+            }
+          } catch {
+            // Unsafe/non-regular/oversized sources have no displayable counters.
+          }
+        }
+      }
+      Object.assign(file, count);
+    }
+  }
   return {
     repositoryId: repo.id,
     base: resolved,
     mergeBase,
     head,
     branch,
+    ...(targetRef === undefined ? {} : { targetRef }),
+    ...(historic
+      ? historic.baseRef === undefined
+        ? {}
+        : { baseRef: historic.baseRef }
+      : { baseRef: base }),
+    worktree,
+    executionEligible,
     mode,
     files,
-    fingerprint: fingerprint([
-      repo.id,
-      mode,
-      resolved,
-      mergeBase,
-      head,
-      branch,
-      files,
-      index,
-      stats,
-    ]),
+    fingerprint: observationFingerprint,
   };
 }
 export async function getReview(
   repo: Repository,
   base: string,
   mode: ReviewMode,
+  target?: string,
 ): Promise<ReviewObservation> {
-  const first = await observe(repo, base, mode);
-  const second = await observe(repo, base, mode);
+  const first = await observe(repo, base, mode, target, undefined, false);
+  const second = await observe(repo, base, mode, target);
   if (first.fingerprint !== second.fingerprint) throw new StaleReviewError();
   return { ...second, id: randomUUID() };
 }
@@ -218,9 +344,13 @@ export async function validateObservation(
       (
         await observe(
           repo,
-          observation.base,
+          observation.historical
+            ? observation.base
+            : (observation.baseRef ?? observation.base),
           observation.mode,
+          observation.targetRef,
           observation.historical ? observation : undefined,
+          false,
         )
       ).fingerprint !== observation.fingerprint
     )
@@ -231,21 +361,26 @@ export async function validateObservation(
     throw new StaleReviewError();
   }
 }
-export async function getBranches(repo: Repository) {
-  let current: string | null = null;
-  try {
-    current = await gitText(repo.root, ["symbolic-ref", "--quiet", "HEAD"]);
-  } catch {}
+export async function getBranches(repo: Repository): Promise<BranchesResponse> {
+  const current = (await currentRepository(repo)).branch;
+  const refs = (
+    await gitText(repo.root, [
+      "for-each-ref",
+      "--format=%(refname)%00%(symref)",
+      "refs/heads/",
+      "refs/remotes/",
+    ])
+  )
+    .split("\n")
+    .map((line) => line.split("\0"))
+    .filter(([ref, symbolic]) => !!ref && !symbolic)
+    .map(([ref]) => ref!);
+  const localBranches = refs.filter((ref) => ref.startsWith("refs/heads/"));
+  const remoteBranches = refs.filter((ref) => ref.startsWith("refs/remotes/"));
   return {
-    branches: (
-      await gitText(repo.root, [
-        "for-each-ref",
-        "--format=%(refname)",
-        "refs/heads/",
-      ])
-    )
-      .split("\n")
-      .filter(Boolean),
+    branches: localBranches,
+    localBranches,
+    remoteBranches,
     current,
   };
 }
@@ -257,7 +392,13 @@ export async function getHistoricalReview(
   if (entry.repositoryId !== repo.id || entry.mode !== "branch")
     throw new StaleReviewError();
   try {
-    const observation = await observe(repo, entry.base, "branch", entry);
+    const observation = await observe(
+      repo,
+      entry.base,
+      "branch",
+      entry.targetRef,
+      entry,
+    );
     if (observation.fingerprint !== entry.fingerprint)
       throw new StaleReviewError();
     for (const f of observation.files)

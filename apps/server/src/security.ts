@@ -14,6 +14,7 @@ export function installSecurity(app: FastifyInstance, port: number, token: strin
         const api = req.url.split('?')[0]?.startsWith('/api/');
         if (!api)
             return;
+        reply.header('Cache-Control', 'no-store');
         if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && !origins.has(req.headers.origin ?? ''))
             return reply.code(403).send({ error: 'Exact local Origin required' });
         const fetchSite = req.headers['sec-fetch-site'];

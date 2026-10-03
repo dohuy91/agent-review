@@ -103,6 +103,21 @@ function describe(url: string): Pick<GitRemote, "transport" | "url"> {
   } catch {}
   return { transport: "unsupported", url: "Unsupported remote URL" };
 }
+// Reused by explicit Push without broadening the Fetch transport or configuration boundary.
+export {
+  configuration as readRemoteConfiguration,
+  describe as describeRemoteUrl,
+};
+// Git's URL-scoped HTTP policy takes precedence over -c http.followRedirects=false.
+// Refuse every non-false scoped override instead of passing a configured redirect policy
+// to a recipient that the user has approved. Config values and URLs stay out of errors.
+export function hasUnsafeRedirectOverrides(values: Map<string, string[]>) {
+  return [...values].some(
+    ([key, configured]) =>
+      /^http\..+\.followredirects$/i.test(key) &&
+      configured.some((value) => !/^(false|no|off|0)$/i.test(value)),
+  );
+}
 async function resolveRemote(
   repo: Repository,
   name: string,
@@ -175,6 +190,9 @@ async function resolveRemote(
   if (symbolic.some((ref) => !ref.startsWith(scope)))
     reason =
       "Remote-tracking references point outside this remote; repair them with Git before Fetch";
+  if (hasUnsafeRedirectOverrides(values))
+    reason =
+      "URL-scoped HTTP redirects are unsupported; configure each redirect override as false before Fetch";
   return { name, ...metadata, fetchAvailable: reason === null, reason };
 }
 export async function getRemotes(repo: Repository): Promise<GitRemote[]> {
@@ -210,9 +228,14 @@ export async function fetchRemote(
   name: string,
   expectedHead: string,
   transport: FetchTransport = nativeFetchTransport,
+  expectedBranch?: string | null,
 ) {
   const identity = await validateIdentity(repo);
-  if (identity.head !== expectedHead) throw new StaleReviewError();
+  if (
+    identity.head !== expectedHead ||
+    (expectedBranch !== undefined && identity.branch !== expectedBranch)
+  )
+    throw new StaleReviewError();
   const config = await configuration(repo);
   const remote = await resolveRemote(repo, name, config);
   if (!remote.fetchAvailable) throw new GitActionError(remote.reason!);

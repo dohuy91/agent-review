@@ -1,0 +1,44 @@
+.push-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+  min-width: 0;
+}
+.push-actions label {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+.push-actions input:not([type="checkbox"]),
+.push-actions select {
+  min-width: 0;
+  width: 100%;
+}
+.push-actions .push-comparison-option {
+  flex-direction: row;
+  align-items: center;
+}
+.push-warning {
+  border-left: 3px solid var(--accent);
+  padding-left: 10px;
+}
+.push-actions small,
+.push-actions p,
+.push-commits li {
+  overflow-wrap: anywhere;
+}
+.push-commits {
+  max-height: 30vh;
+  overflow: auto;
+  padding-left: 24px;
+}
+.push-commits li {
+  margin-bottom: 8px;
+}
+.push-commits small {
+  display: block;
+  color: var(--muted);
+}

@@ -20,6 +20,7 @@ import {
   type ProcessFactory,
 } from "../../../../packages/agents/src/adapters.js";
 import { agentDefaults } from "../../../../packages/agents/src/defaults.js";
+import type { RepositoryQueue } from "../../../../packages/git/src/mutations.js";
 class OpenCodeUnavailableError extends Error {}
 export function installAgentRoutes(
   app: FastifyInstance,
@@ -33,6 +34,7 @@ export function installAgentRoutes(
     skillRoots?: string[];
     enableWrites?: boolean;
     processFactory?: ProcessFactory;
+    queue?: RepositoryQueue;
   },
 ) {
   const defaults = agentDefaults(options.container);
@@ -123,6 +125,9 @@ export function installAgentRoutes(
           commonDir: r.commonDir,
           branch: o.branch,
           head: o.head,
+          ...(o.targetRef === undefined ? {} : { targetRef: o.targetRef }),
+          ...(o.baseRef === undefined ? {} : { baseRef: o.baseRef }),
+          ...(o.worktree === undefined ? {} : { worktree: o.worktree }),
           base: o.base,
           mergeBase: o.mergeBase,
           mode: o.mode,
@@ -175,29 +180,34 @@ export function installAgentRoutes(
           comments,
         };
       }
-      try {
-        const context = await validate();
-        if (
-          !options.processFactory &&
-          b.adapter !== "opencode" &&
-          !(
-            await (b.adapter === "codex"
-              ? (availability ??= (
-                  options.agentAvailability ?? codexAvailability
-                )())
-              : extra(b.adapter))
-          ).available
-        )
-          throw Object.assign(new Error(`${b.adapter} unavailable`), {
-            statusCode: 503,
-          });
-        const text = await catalog.resolve(context.profile.effective!);
-        return reply.code(201).send(await manager.start(b, validate, text));
-      } catch (error) {
-        if (error instanceof OpenCodeUnavailableError)
-          return reply.code(503).send({ error: error.message });
-        throw error;
-      }
+      const launch = async () => {
+        try {
+          const context = await validate();
+          if (
+            !options.processFactory &&
+            b.adapter !== "opencode" &&
+            !(
+              await (b.adapter === "codex"
+                ? (availability ??= (
+                    options.agentAvailability ?? codexAvailability
+                  )())
+                : extra(b.adapter))
+            ).available
+          )
+            throw Object.assign(new Error(`${b.adapter} unavailable`), {
+              statusCode: 503,
+            });
+          const text = await catalog.resolve(context.profile.effective!);
+          return reply.code(201).send(await manager.start(b, validate, text));
+        } catch (error) {
+          if (error instanceof OpenCodeUnavailableError)
+            return reply.code(503).send({ error: error.message });
+          throw error;
+        }
+      };
+      return options.queue
+        ? options.queue.run(req.params.id, launch)
+        : launch();
     },
   );
   app.get<{ Params: { id: string; historyId: string } }>(
@@ -280,4 +290,7 @@ export function installAgentRoutes(
       if (run.status !== "running") reply.raw.end();
     },
   );
+  return {
+    hasActive: (repositoryId: string) => manager.hasActive(repositoryId),
+  };
 }

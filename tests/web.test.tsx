@@ -7,6 +7,7 @@ import {
   fireEvent,
   waitFor,
   cleanup,
+  within,
 } from "@testing-library/react";
 import App from "../apps/web/src/App.js";
 afterEach(() => {
@@ -124,7 +125,9 @@ test("lazy selected diff, deleted old-side range, comment payload and appearance
   );
   fireEvent.click(screen.getByRole("button", { name: "Split" }));
   expect(screen.getByTestId("diff").classList.contains("split")).toBe(true);
-  fireEvent.click(screen.getByRole("button", { name: "Toggle theme" }));
+  fireEvent.change(screen.getByRole("combobox", { name: "Theme" }), {
+    target: { value: "dark" },
+  });
   expect(document.documentElement.dataset.theme).toBe("dark");
   expect(getComputedStyle(document.querySelector(".cm-line span")!).color).toBe(
     "rgb(199, 146, 234)",
@@ -267,43 +270,11 @@ const savedNote = {
   attachedRange: { startLine: 1, endLine: 2 },
   historicalContent: "available",
 };
-test("historic branch selection opens scoped history ID and disables every historical mutation control", async () => {
+test("saved history stays outside current review navigation", async () => {
   const calls = fixture();
-  const original = globalThis.fetch;
+  const original = fetch;
   vi.stubGlobal("fetch", async (url: any, opts: any = {}) => {
-    const route = String(url);
-    if (route.endsWith("/history"))
-      return {
-        ok: true,
-        json: async () => ({
-          reviews: [
-            {
-              id: "historic",
-              base: "stored-base",
-              mode: "branch",
-              head: "old-head",
-              acceptedAt: "now",
-              historicalContent: "git-objects-only",
-            },
-          ],
-          runs: [],
-        }),
-      } as Response;
-    if (route.endsWith("/history/historic/review")) {
-      calls.push({ url: route, body: null });
-      return {
-        ok: true,
-        json: async () => ({
-          id: "historic-observation",
-          historical: true,
-          files,
-          mode: "branch",
-          branch: "old-branch",
-          head: "old-head",
-        }),
-      } as Response;
-    }
-    if (route.includes("/comments"))
+    if (String(url).includes("/comments"))
       return {
         ok: true,
         json: async () => ({ comments: [savedNote] }),
@@ -312,81 +283,16 @@ test("historic branch selection opens scoped history ID and disables every histo
   });
   render(<App />);
   await screen.findByRole("button", { name: "old line 1" });
-  fireEvent.click(
-    await screen.findByRole("button", { name: /branch · detached · old-head/ }),
-  );
-  await screen.findByText(/Historical read-only/);
-  expect(calls.some((c) => c.url.endsWith("/history/historic/review"))).toBe(
-    true,
-  );
+  expect(screen.queryByText("Review history")).toBeNull();
+  expect(calls.some((call) => call.url.includes("/history"))).toBe(false);
+  fireEvent.click(screen.getByRole("button", { name: "Comments 1" }));
+  expect(screen.getByRole("button", { name: "Edit" })).toBeTruthy();
   expect(
     (screen.getByRole("button", { name: "Add comment" }) as HTMLButtonElement)
       .disabled,
-  ).toBe(true);
-  expect(
-    (
-      screen.getByRole("button", {
-        name: "○ Mark reviewed",
-      }) as HTMLButtonElement
-    ).disabled,
-  ).toBe(true);
-  expect(
-    (screen.getByRole("button", { name: "Fix profiles" }) as HTMLButtonElement)
-      .disabled,
-  ).toBe(true);
-  expect(
-    (
-      screen.getByRole("button", {
-        name: "Configure profile",
-      }) as HTMLButtonElement
-    ).disabled,
-  ).toBe(true);
-  expect(
-    (screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement)
-      .disabled,
-  ).toBe(true);
-  fireEvent.click(screen.getByRole("button", { name: "Comments 1" }));
-  for (const name of ["Edit", "Resolve", "Delete"])
-    expect(
-      (screen.getByRole("button", { name }) as HTMLButtonElement).disabled,
-    ).toBe(true);
+  ).toBe(false);
 });
 
-test("selecting mutable history refreshes current endpoints even when comparison metadata already matches", async () => {
-  const calls = fixture();
-  const original = globalThis.fetch;
-  vi.stubGlobal("fetch", async (url: any, opts: any = {}) => {
-    if (String(url).endsWith("/history"))
-      return {
-        ok: true,
-        json: async () => ({
-          reviews: [
-            {
-              id: "mutable",
-              base: "HEAD",
-              mode: "full",
-              head: "old-head",
-              acceptedAt: "now",
-              historicalContent: "unavailable",
-            },
-          ],
-          runs: [],
-        }),
-      } as Response;
-    return original(url, opts);
-  });
-  render(<App />);
-  await screen.findByRole("button", { name: "old line 1" });
-  const before = calls.filter((c) => c.url.includes("/review?")).length;
-  fireEvent.click(
-    await screen.findByRole("button", { name: /full · detached · old-head/ }),
-  );
-  await waitFor(() =>
-    expect(calls.filter((c) => c.url.includes("/review?")).length).toBe(
-      before + 1,
-    ),
-  );
-});
 test("late comment follow-up cannot replace a refreshed observation", async () => {
   fixture();
   const original = fetch;
@@ -1000,7 +906,11 @@ test("agent confirmation Escape preserves draft and restores main modal keyboard
   fireEvent.change(screen.getByLabelText("Comment body"), {
     target: { value: "Preserve on Escape" },
   });
-  fireEvent.click(screen.getByRole("checkbox"));
+  fireEvent.click(
+    within(screen.getByRole("region", { name: "Agent controls" })).getByRole(
+      "checkbox",
+    ),
+  );
   const send = screen.getByRole("button", { name: "Send to agent" });
   await waitFor(() => expect((send as HTMLButtonElement).disabled).toBe(false));
   send.focus();

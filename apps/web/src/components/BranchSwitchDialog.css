@@ -1,0 +1,53 @@
+.branch-switch-dialog p {
+  line-height: 1.5;
+}
+.branch-switch-ref,
+.branch-switch-recovery {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.branch-switch-dirty {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  padding: 10px;
+  border: 1px solid var(--border);
+}
+.branch-switch-dirty ul {
+  padding-left: 16px;
+  margin: 8px 0;
+  overflow-wrap: anywhere;
+}
+.branch-switch-dialog fieldset {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-block: 12px;
+  border: 1px solid var(--border);
+}
+.modal .branch-switch-dialog label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0;
+}
+.modal .branch-switch-dialog label input[type="radio"],
+.modal .branch-switch-dialog label input[type="checkbox"] {
+  display: inline-block;
+  width: auto;
+  margin: 0;
+}
+.branch-switch-commit {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-bottom: 12px;
+}
+.branch-switch-commit label:has(textarea) {
+  display: block;
+}
+.branch-switch-commit textarea {
+  width: 100%;
+  min-height: 70px;
+  margin-top: 6px;
+}

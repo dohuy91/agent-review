@@ -112,3 +112,18 @@ test.each([false, true])(
   },
   30_000,
 );
+
+import { existsSync } from "node:fs";
+test("Docker readonly default cannot implicitly enable writes; writable opt-in requires both flag and exact rw mount", () => {
+  expect(parseCLI(["repo", "--container"]).enableWrites).toBe(false);
+  expect(
+    parseCLI(["repo", "--container", "--enable-writes"]).enableWrites,
+  ).toBe(true);
+  expect(readFileSync("compose.yaml", "utf8")).not.toContain("--enable-writes");
+  expect(existsSync("compose.writable.yaml")).toBe(true);
+  const writable = readFileSync("compose.writable.yaml", "utf8");
+  expect(writable).toContain("--enable-writes");
+  expect(writable).toContain("read_only: false");
+  expect(writable).toContain("create_host_path: false");
+  expect(writable).not.toMatch(/docker\.sock|SSH_AUTH_SOCK|\/home\//);
+});

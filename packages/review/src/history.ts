@@ -21,6 +21,20 @@ export function saveReviewHistory(
     head,
     branch,
     mode,
+    ...(observation.targetRef === undefined
+      ? {}
+      : { targetRef: observation.targetRef }),
+    ...(observation.baseRef === undefined
+      ? {}
+      : { baseRef: observation.baseRef }),
+    ...(observation.worktree === undefined
+      ? {}
+      : {
+          worktree: {
+            head: observation.worktree.head,
+            branch: observation.worktree.branch,
+          },
+        }),
     acceptedAt: new Date().toISOString(),
     fileCount: observation.files.length,
     historicalContent: mode === "branch" ? "git-objects-only" : "unavailable",

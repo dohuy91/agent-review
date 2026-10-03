@@ -19,8 +19,10 @@ import { commitSelected } from "../../../../packages/git/src/commit.js";
 import {
   fetchRemote,
   getRemotes,
+  readRemoteConfiguration,
   type FetchTransport,
 } from "../../../../packages/git/src/remotes.js";
+import { getComparisonDestinations } from "../../../../packages/git/src/comparison-destinations.js";
 import { StaleReviewError } from "../../../../packages/git/src/review.js";
 import { fingerprint } from "../../../../packages/review/src/fingerprint.js";
 function body(value: unknown, keys: string[]): Record<string, unknown> {
@@ -46,11 +48,12 @@ export function installGitActionRoutes(
     container?: boolean;
     enableWrites?: boolean;
     fetchTransport?: FetchTransport;
+    queue?: RepositoryQueue;
   },
 ) {
   const writesEnabled =
     options.enableWrites ?? agentDefaults(options.container).enableWrites;
-  const queue = new RepositoryQueue();
+  const queue = options.queue ?? new RepositoryQueue();
   const previews = new Map<
     string,
     { preview: DiscardPreview; reviewId: string; expires: number }
@@ -77,11 +80,9 @@ export function installGitActionRoutes(
       if (e instanceof GitActionError)
         return reply.code(e.statusCode).send({ error: e.message });
       if (e instanceof StaleReviewError)
-        return reply
-          .code(409)
-          .send({
-            error: "Repository or review changed; refresh before retrying",
-          });
+        return reply.code(409).send({
+          error: "Repository or review changed; refresh before retrying",
+        });
       throw e;
     }
   };
@@ -242,10 +243,18 @@ export function installGitActionRoutes(
   app.get<{ Params: { id: string } }>(
     "/api/repositories/:id/remotes",
     async (req, reply) =>
-      execute(
-        async () => ({ remotes: await getRemotes(repository(req.params.id)) }),
-        reply,
-      ),
+      execute(async () => {
+        const repo = repository(req.params.id);
+        const remotes = await getRemotes(repo);
+        const config = await readRemoteConfiguration(repo);
+        return {
+          remotes,
+          comparisonDestinations: await getComparisonDestinations(
+            repo,
+            config.values,
+          ),
+        };
+      }, reply),
   );
   app.post<{ Params: { id: string } }>(
     "/api/repositories/:id/fetch",
@@ -259,8 +268,10 @@ export function installGitActionRoutes(
         if (!/^[a-f0-9]{40,64}$/.test(expectedHead))
           throw new GitActionError("Expected HEAD is required");
         return queue.run(req.params.id, async () => {
-          const { repository: repo, observation: o } =
-            await access.getObservation(req.params.id, reviewId);
+          const { repository: repo, observation: o } = await current(
+            req.params.id,
+            reviewId,
+          );
           if (o.historical || o.head !== expectedHead)
             throw new StaleReviewError();
           return fetchRemote(
@@ -268,6 +279,7 @@ export function installGitActionRoutes(
             remote,
             expectedHead,
             options.fetchTransport,
+            o.branch,
           );
         });
       }, reply),

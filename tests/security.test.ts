@@ -54,3 +54,15 @@ test('selectingUnrelatedRepositoryResetsLaunchBase', async () => {
  expect((await a.inject({method:'POST',url:'/api/repositories',headers:auth,payload:{path:second}})).statusCode).toBe(200);
  expect((await a.inject({url:'/api/repositories',headers:auth})).json().base).toBeNull();
 });
+
+test('authenticated API responses must not be retained in browser caches', async () => {
+ const a = await app();
+ const session = await a.inject({method:'POST',url:'/api/session',headers,payload:{token:'secret'}});
+ const auth = {...headers,cookie:`review_session=${session.cookies[0]!.value}`};
+ const inventory = await a.inject({url:'/api/repositories',headers:auth});
+ expect(inventory.statusCode).toBe(200);
+ expect(inventory.headers['cache-control']).toBe('no-store');
+ const denied = await a.inject({url:'/api/repositories',headers});
+ expect(denied.statusCode).toBe(401);
+ expect(denied.headers['cache-control']).toBe('no-store');
+});

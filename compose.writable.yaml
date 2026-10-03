@@ -1,0 +1,18 @@
+# Explicit opt-in only: docker compose -f compose.yaml -f compose.writable.yaml up --build -d
+# Keep state and add exact rw commonDir/gitDir mounts for linked worktrees.
+# This override does not provide agents, skills, credentials, SSH sockets, or home access.
+services:
+  review:
+    command:
+      [
+        "${REVIEW_REPO:?Set REVIEW_REPO to the absolute repository path}",
+        "--no-open",
+        "--enable-writes",
+      ]
+    volumes:
+      - type: bind
+        source: ${REVIEW_REPO:?Set REVIEW_REPO to the absolute repository path}
+        target: ${REVIEW_REPO:?Set REVIEW_REPO to the absolute repository path}
+        read_only: false
+        bind:
+          create_host_path: false

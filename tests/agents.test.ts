@@ -1,4 +1,4 @@
-import { test, expect, afterEach } from "vitest";
+import { test, expect, afterEach, vi } from "vitest";
 import {
   mkdtemp,
   mkdir,
@@ -640,3 +640,43 @@ test("historic branch comparison reopens pinned Git endpoints after HEAD advance
   ).toBe(200);
   expect((await f.call("GET", "history/unknown/review")).statusCode).toBe(404);
 });
+
+test("production branch-switch routes refuse an active agent until its process has exited", async () => {
+  const f = await fixture(
+    true,
+    "process.stdin.resume();setInterval(()=>{},1000)",
+    "branch",
+  );
+  const before = f.git("symbolic-ref", "HEAD");
+  f.git("branch", "switch-after-agent");
+  const runResponse = await f.call("POST", "agents", f.payload);
+  expect(runResponse.statusCode, runResponse.body).toBe(201);
+  const run = runResponse.json();
+  const preview = () =>
+    f.call("POST", "branch-switch-preview", {
+      reviewId: f.review.id,
+      targetRef: "refs/heads/switch-after-agent",
+    });
+  const blocked = await preview();
+  expect(blocked.statusCode, blocked.body).toBe(409);
+  expect(blocked.json()).toMatchObject({
+    reason: "busy",
+    outcome: "not-switched",
+  });
+  expect(f.git("symbolic-ref", "HEAD")).toBe(before);
+  await f.call("POST", `agents/${run.id}/stop`, {});
+  let ready: any;
+  await vi.waitFor(
+    async () => {
+      ready = await preview();
+      expect(ready.statusCode, ready.body).toBe(200);
+    },
+    { timeout: 5000, interval: 50 },
+  );
+  const switched = await f.call("POST", "branch-switch", {
+    previewId: ready.json().previewId,
+    strategy: "clean",
+  });
+  expect(switched.statusCode, switched.body).toBe(200);
+  expect(f.git("symbolic-ref", "HEAD")).toBe("refs/heads/switch-after-agent");
+}, 15000);

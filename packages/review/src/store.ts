@@ -144,6 +144,8 @@ export class ReviewStore {
       mergeBase: obs.mergeBase,
       head: obs.head,
       branch: obs.branch,
+      ...(obs.targetRef === undefined ? {} : { targetRef: obs.targetRef }),
+      ...(obs.baseRef === undefined ? {} : { baseRef: obs.baseRef }),
       reviewFingerprint: obs.fingerprint,
       fileFingerprint: diff.fingerprint,
       sourceOid: input.side === "old" ? file.oldOid : file.newOid,

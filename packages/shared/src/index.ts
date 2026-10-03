@@ -217,3 +217,70 @@ export interface HistoryResponse {
   reviews: ReviewHistoryEntry[];
   runs: AgentRun[];
 }
+
+export interface GitCapabilities {
+  writesEnabled: boolean;
+  fetchEnabled: boolean;
+  reason: string | null;
+  hunkStageMode: "working";
+  hunkUnstageMode: "staged";
+}
+export interface GitActionResult {
+  ok: true;
+  changed: boolean;
+}
+export interface GitCommitResult extends GitActionResult {
+  commit: string;
+}
+export interface DiscardPreview {
+  previewId: string;
+  target: Pick<
+    ReviewExport["target"],
+    | "repositoryId"
+    | "worktreeRoot"
+    | "gitDir"
+    | "commonDir"
+    | "branch"
+    | "head"
+    | "reviewFingerprint"
+  >;
+  path: string;
+  fingerprint: string;
+  operation: "restore-index" | "delete-untracked";
+}
+export interface GitRemote {
+  name: string;
+  url: string;
+  transport: "https" | "ssh" | "unsupported";
+  fetchAvailable: boolean;
+  reason: string | null;
+}
+export interface GitRemotesResponse {
+  remotes: GitRemote[];
+}
+
+export interface GitActionRequest {
+  reviewId: string;
+  action: "stage" | "unstage";
+  path: string;
+  hunkIndex?: number;
+}
+export interface DiscardPreviewRequest {
+  reviewId: string;
+  path: string;
+}
+export interface DiscardRequest {
+  previewId: string;
+  confirmed: true;
+}
+export interface GitCommitRequest {
+  reviewId: string;
+  paths: string[];
+  message: string;
+}
+/** Live observations only; no user URL, refspec, command, or environment. */
+export interface GitFetchRequest {
+  reviewId: string;
+  remote: string;
+  expectedHead: string;
+}

@@ -1,3 +1,4 @@
+import { installGitActionRoutes } from "./routes/git-actions.js";
 import { installWatchRoutes } from "./routes/watch.js";
 import Fastify from "fastify";
 import { ReviewStore } from "../../../packages/review/src/store.js";
@@ -18,6 +19,8 @@ import type {
 import { installAgentRoutes } from "./routes/agents.js";
 import type { ProcessFactory } from "../../../packages/agents/src/adapters.js";
 export interface AppOptions {
+  /** Internal fixture seam; never a launch or HTTP option. */
+  fetchTransport?: import("../../../packages/git/src/remotes.js").FetchTransport;
   /** Internal fixture seam, never exposed through launch options or HTTP. */
   agentAvailability?: typeof import("../../../packages/agents/src/adapters.js").codexAvailability;
   adapterAvailability?: typeof import("../../../packages/agents/src/adapters.js").adapterAvailability;
@@ -91,11 +94,9 @@ export async function createApp(options: AppOptions) {
       selectedRepositoryId = repo.id;
       return repo;
     } catch {
-      return reply
-        .code(400)
-        .send({
-          error: "Path must identify an existing Git worktree with a commit",
-        });
+      return reply.code(400).send({
+        error: "Path must identify an existing Git worktree with a commit",
+      });
     }
   });
   const store = new ReviewStore(canonicalDataDir);
@@ -108,6 +109,7 @@ export async function createApp(options: AppOptions) {
   installAgentRoutes(app, repositories, reviewAccess, store, options);
   installCommentRoutes(app, repositories, reviewAccess, store);
   installWatchRoutes(app, repositories);
+  installGitActionRoutes(app, repositories, reviewAccess, options);
   app.setErrorHandler((error, _req, reply) => {
     const status = (error as { statusCode?: number }).statusCode ?? 500;
     return reply

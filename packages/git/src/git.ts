@@ -20,6 +20,7 @@ const readPrefix = [
     '--no-pager', '--no-lazy-fetch', '--no-replace-objects', '--literal-pathspecs',
     '-c', 'core.fsmonitor=false', '-c', 'core.untrackedCache=false',
     '-c', 'core.hooksPath=/dev/null', '-c', 'diff.external=',
+    '-c', 'diff.autoRefreshIndex=false',
 ];
 export async function git(root: string, args: string[]): Promise<Buffer> {
     // Attribute driver names are repository-defined. Override every effective
@@ -105,4 +106,59 @@ export async function readWorktree(root: string, path: string): Promise<Buffer |
     finally {
         await handle.close();
     }
+}
+
+/** Raw index bytes are part of execution authority, including flags/extensions. */
+export async function readIndexBytes(gitDir: string): Promise<Buffer | null> {
+  if ((await realpath(gitDir)) !== gitDir)
+    throw new Error("Git directory changed");
+  const directoryBefore = await lstat(gitDir, { bigint: true });
+  if (!directoryBefore.isDirectory()) throw new Error("Unsafe Git directory");
+  const path = resolve(gitDir, "index");
+  let before;
+  try {
+    before = await lstat(path, { bigint: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+  if (!before.isFile() || before.size > BigInt(16 * 1024 * 1024))
+    throw new Error("Unsafe Git index");
+  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const stat = await handle.stat({ bigint: true });
+    if (stat.ino !== before.ino || stat.dev !== before.dev)
+      throw new Error("Git index changed");
+    const buffer = Buffer.alloc(Number(before.size) + 1);
+    let size = 0;
+    for (;;) {
+      const { bytesRead } = await handle.read(
+        buffer,
+        size,
+        buffer.length - size,
+        size,
+      );
+      size += bytesRead;
+      if (!bytesRead || size === buffer.length) break;
+    }
+    const after = await lstat(path, { bigint: true });
+    const directoryAfter = await lstat(gitDir, { bigint: true });
+    if (
+      (await realpath(gitDir)) !== gitDir ||
+      directoryBefore.ino !== directoryAfter.ino ||
+      directoryBefore.dev !== directoryAfter.dev
+    )
+      throw new Error("Git directory changed");
+    if (
+      size > 16 * 1024 * 1024 ||
+      after.ino !== stat.ino ||
+      after.dev !== stat.dev ||
+      after.ctimeNs !== before.ctimeNs ||
+      BigInt(size) !== before.size
+    )
+      throw new Error("Git index changed");
+    return buffer.subarray(0, size);
+  } finally {
+    await handle.close();
+  }
 }

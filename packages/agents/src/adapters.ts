@@ -98,6 +98,8 @@ export function startAdapter(
   cwd: string,
   prompt: string,
 ) {
+  if (!["codex", "claude", "opencode"].includes(adapter))
+    throw Object.assign(new Error("Unsupported adapter"), { statusCode: 400 });
   if (adapter === "codex") return startCodex(factory, cwd, prompt);
   if (
     adapter === "opencode" &&
@@ -127,6 +129,17 @@ export function startAdapter(
     cwd,
     shell: false,
     detached: process.platform !== "win32",
+    // Verified v1.18.31 ShareNext guard stops create/sync independently of
+    // project, inline, organization, and managed configuration precedence.
+    ...(adapter === "opencode"
+      ? {
+          env: {
+            ...process.env,
+            OPENCODE_DISABLE_SHARE: "true",
+            OPENCODE_AUTO_SHARE: "false",
+          },
+        }
+      : {}),
   });
   child.stdin.on("error", () => {});
   child.stdin.end(adapter === "claude" ? prompt : undefined);
@@ -178,13 +191,18 @@ export async function adapterAvailability(
             "--no-session-persistence",
           ]
         : ["--format", "--dir"];
-    const available = flags.every((f) => help.includes(f));
+    const supportedSharing = id !== "opencode" || version.trim() === "1.18.31";
+    const available = flags.every((f) => help.includes(f)) && supportedSharing;
     return {
       id,
       provider,
       available,
       version: version.trim().slice(0, 100),
-      error: available ? null : `Unsupported ${id} CLI`,
+      error: available
+        ? null
+        : !supportedSharing
+          ? "OpenCode unavailable: no-sharing control is verified only for 1.18.31; use that version or another adapter"
+          : `Unsupported ${id} CLI`,
     };
   } catch {
     return {

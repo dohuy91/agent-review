@@ -1,4 +1,4 @@
-import { attachComment } from "../../../../packages/review/src/attachment.js";
+import { createAttachmentResolver } from "../../../../packages/review/src/attachment.js";
 import type { FastifyInstance } from "fastify";
 import type {
   Repository,
@@ -7,11 +7,7 @@ import type {
 } from "../../../../packages/shared/src/index.js";
 import type { ReviewAccess } from "./reviews.js";
 import { ReviewStore } from "../../../../packages/review/src/store.js";
-import {
-  attach,
-  makeAnchor,
-  invalid,
-} from "../../../../packages/review/src/anchors.js";
+import { invalid } from "../../../../packages/review/src/anchors.js";
 import { getFileDiff } from "../../../../packages/git/src/diff.js";
 import {
   getProfiles,
@@ -22,7 +18,6 @@ import type {
   SkillProfile,
   ReviewExport,
 } from "../../../../packages/shared/src/index.js";
-import { git } from "../../../../packages/git/src/git.js";
 export function installCommentRoutes(
   app: FastifyInstance,
   repositories: Map<string, Repository>,
@@ -35,6 +30,14 @@ export function installCommentRoutes(
       throw Object.assign(new Error("Unknown repository"), { statusCode: 404 });
     return r;
   };
+  async function writableContext(repositoryId: string, reviewId: string) {
+    const context = await access.getObservation(repositoryId, reviewId);
+    if (context.observation.historical)
+      throw Object.assign(new Error("Historic comparison is read-only"), {
+        statusCode: 403,
+      });
+    return context;
+  }
   app.post<{ Params: { id: string }; Body: CommentInput }>(
     "/api/repositories/:id/comments",
     async (req, reply) => {
@@ -47,14 +50,10 @@ export function installCommentRoutes(
         typeof b.severity !== "string"
       )
         throw invalid();
-      const { repository, observation } = await access.getObservation(
+      const { repository, observation } = await writableContext(
         req.params.id,
         b.reviewId,
       );
-      if (observation.historical)
-        throw Object.assign(new Error("Historic comparison is read-only"), {
-          statusCode: 403,
-        });
       const diff = await getFileDiff(repository, observation, b.path);
       return reply
         .code(201)
@@ -69,11 +68,11 @@ export function installCommentRoutes(
       repository.id,
       req.query.reviewId,
     );
-    const comments = await Promise.all(
-      store
-        .list(repository.id)
-        .map((c) => attachComment(repository, observation, c)),
-    );
+    const comments = await createAttachmentResolver(
+      repository,
+      observation,
+    ).attachAll(store.list(repository.id));
+    await access.getObservation(repository.id, observation.id);
     return { comments };
   }
   app.get<{ Params: { id: string }; Querystring: { reviewId?: string } }>(
@@ -100,7 +99,7 @@ export function installCommentRoutes(
       typeof req.body.path !== "string"
     )
       throw invalid();
-    const { observation } = await access.getObservation(
+    const { observation } = await writableContext(
       req.params.id,
       req.body.reviewId,
     );
@@ -130,7 +129,7 @@ export function installCommentRoutes(
     };
   }>("/api/repositories/:id/profiles", async (req) => {
     if (!req.body || typeof req.body.reviewId !== "string") throw invalid();
-    const { repository, observation } = await access.getObservation(
+    const { repository, observation } = await writableContext(
       req.params.id,
       req.body.reviewId,
     );
@@ -174,17 +173,26 @@ export function installCommentRoutes(
   );
   app.patch<{
     Params: { id: string; commentId: string };
+    Querystring: { reviewId?: string };
     Body: Parameters<ReviewStore["update"]>[2];
   }>("/api/repositories/:id/comments/:commentId", async (req) => {
     repo(req.params.id);
+    if (req.query.reviewId !== undefined) {
+      if (typeof req.query.reviewId !== "string") throw invalid();
+      await writableContext(req.params.id, req.query.reviewId);
+    }
     return store.update(req.params.id, req.params.commentId, req.body);
   });
-  app.delete<{ Params: { id: string; commentId: string } }>(
-    "/api/repositories/:id/comments/:commentId",
-    async (req, reply) => {
-      repo(req.params.id);
-      store.delete(req.params.id, req.params.commentId);
-      return reply.code(204).send();
-    },
-  );
+  app.delete<{
+    Params: { id: string; commentId: string };
+    Querystring: { reviewId?: string };
+  }>("/api/repositories/:id/comments/:commentId", async (req, reply) => {
+    repo(req.params.id);
+    if (req.query.reviewId !== undefined) {
+      if (typeof req.query.reviewId !== "string") throw invalid();
+      await writableContext(req.params.id, req.query.reviewId);
+    }
+    store.delete(req.params.id, req.params.commentId);
+    return reply.code(204).send();
+  });
 }

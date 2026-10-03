@@ -14,6 +14,7 @@ export default function CommentDrawer({
   onUpdate,
   onDelete,
   onCancel,
+  readOnly = false,
 }: {
   comments: AttachedComment[];
   path: string;
@@ -24,6 +25,7 @@ export default function CommentDrawer({
   onUpdate: (id: string, patch: unknown) => Promise<boolean>;
   onDelete: (id: string) => Promise<void>;
   onCancel: () => void;
+  readOnly?: boolean;
 }) {
   const [body, setBody] = useState(""),
     [severity, setSeverity] = useState<CommentSeverity>("info"),
@@ -47,8 +49,11 @@ export default function CommentDrawer({
       if (previous?.isConnected) previous.focus({ preventScroll: true });
     };
   }, [creating, editing]);
-  const visible = allNotes ? comments : comments.filter((c) => (c.attachedPath ?? c.path) === path);
+  const visible = allNotes
+    ? comments
+    : comments.filter((c) => (c.attachedPath ?? c.path) === path);
   async function save() {
+    if (readOnly) return;
     const generation = draftGeneration.current;
     setBusy(true);
     try {
@@ -82,7 +87,7 @@ export default function CommentDrawer({
           All notes
         </button>
       </div>
-      {(creating || editing) && (
+      {!readOnly && (creating || editing) && (
         <div className="compose">
           <strong>
             {editing
@@ -131,7 +136,12 @@ export default function CommentDrawer({
       )}
       {visible.map((c) => (
         <article className="comment" key={c.id}>
-          <strong className="note-file">{c.path}{c.attachedPath&&c.attachedPath!==c.path?` → ${c.attachedPath}`:""}</strong>
+          <strong className="note-file">
+            {c.path}
+            {c.attachedPath && c.attachedPath !== c.path
+              ? ` → ${c.attachedPath}`
+              : ""}
+          </strong>
           {allNotes && (
             <div className="note-context">
               Original: {c.side} {c.startLine}–{c.endLine} · {c.mode} ·{" "}
@@ -156,6 +166,7 @@ export default function CommentDrawer({
           )}
           <div className="comment-actions">
             <button
+              disabled={readOnly}
               onClick={() => {
                 draftGeneration.current++;
                 setBusy(false);
@@ -167,6 +178,7 @@ export default function CommentDrawer({
               Edit
             </button>
             <button
+              disabled={readOnly}
               onClick={() =>
                 void onUpdate(c.id, {
                   status: c.status === "open" ? "resolved" : "open",
@@ -175,7 +187,9 @@ export default function CommentDrawer({
             >
               {c.status === "open" ? "Resolve" : "Reopen"}
             </button>
-            <button onClick={() => void onDelete(c.id)}>Delete</button>
+            <button disabled={readOnly} onClick={() => void onDelete(c.id)}>
+              Delete
+            </button>
           </div>
         </article>
       ))}

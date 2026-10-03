@@ -282,6 +282,7 @@ export default function App() {
   async function saveComment(body: string, severity: CommentSeverity) {
     if (
       !review ||
+      review.historical ||
       !currentSelection ||
       selectionContext.current?.reviewId !== review.id ||
       selectionContext.current.path !== path
@@ -308,9 +309,14 @@ export default function App() {
     }
   }
   async function updateComment(id: string, patch: unknown) {
+    if (!review || review.historical) return false;
     const generation = epoch.current;
     try {
-      await api(`${prefix}/comments/${id}`, "PATCH", patch);
+      await api(
+        `${prefix}/comments/${id}?${new URLSearchParams({ reviewId: review.id })}`,
+        "PATCH",
+        patch,
+      );
       return await updateComments(generation);
     } catch (e) {
       if (generation === epoch.current) fail(e);
@@ -318,9 +324,13 @@ export default function App() {
     }
   }
   async function deleteComment(id: string) {
+    if (!review || review.historical) return;
     const generation = epoch.current;
     try {
-      await api(`${prefix}/comments/${id}`, "DELETE");
+      await api(
+        `${prefix}/comments/${id}?${new URLSearchParams({ reviewId: review.id })}`,
+        "DELETE",
+      );
       await updateComments(generation);
     } catch (e) {
       if (generation === epoch.current) fail(e);
@@ -446,7 +456,7 @@ export default function App() {
     }
   }, [profileOpen, scope, profiles]);
   async function saveProfile(remove = false) {
-    if (!review) return;
+    if (!review || review.historical) return;
     const generation = epoch.current;
     try {
       const response = await api<ProfilesResponse>(
@@ -480,7 +490,12 @@ export default function App() {
           <button onClick={() => setRegisterOpen(true)}>
             ＋ Open repository
           </button>
-          <button onClick={() => setProfileOpen(true)}>Fix profiles</button>
+          <button
+            disabled={!!review?.historical}
+            onClick={() => setProfileOpen(true)}
+          >
+            Fix profiles
+          </button>
           <button aria-label="Toggle theme" onClick={() => setDark(!dark)}>
             {dark ? "☀" : "☾"}
           </button>
@@ -574,7 +589,7 @@ export default function App() {
               </button>
             </div>
             <button
-              disabled={!path || !review || markBusy}
+              disabled={!path || !review || review.historical || markBusy}
               onClick={() => void mark()}
             >
               {reviewed.has(path) ? "✓ Reviewed" : "○ Mark reviewed"}
@@ -622,7 +637,7 @@ export default function App() {
           <footer>
             <span>
               {review?.historical ? "Historical read-only · " : ""}
-              {repository?.branch || "Detached HEAD"} ·{" "}
+              {review?.branch || repository?.branch || "Detached HEAD"} ·{" "}
               {review?.head?.slice(0, 8) || "—"}
             </span>
             <span>
@@ -679,6 +694,7 @@ export default function App() {
                 onUpdate={updateComment}
                 onDelete={deleteComment}
                 onCancel={resetDraft}
+                readOnly={!!review?.historical}
               />
             </>
           )}
@@ -698,6 +714,7 @@ export default function App() {
               setHistoricalId(id ?? null);
               setBase(base);
               setMode(mode);
+              setRefresh((v) => v + 1);
             }}
           />
           <div className="profile-summary">
@@ -710,7 +727,10 @@ export default function App() {
                 ? `Inherited from ${profiles.source} · revision ${profiles.revision}`
                 : "Select an installed fix skill"}
             </small>
-            <button onClick={() => setProfileOpen(true)}>
+            <button
+              disabled={!!review?.historical}
+              onClick={() => setProfileOpen(true)}
+            >
               Configure profile
             </button>
           </div>

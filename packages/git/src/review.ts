@@ -47,7 +47,7 @@ async function observe(
   if (historic) {
     if (
       mode !== "branch" ||
-      ![historic.head, historic.mergeBase].every((oid) =>
+      ![historic.head, historic.mergeBase, base].every((oid) =>
         /^[0-9a-f]{40,64}$/.test(oid),
       )
     )
@@ -55,7 +55,9 @@ async function observe(
     await git(repo.root, ["cat-file", "-e", `${historic.head}^{commit}`]);
     await git(repo.root, ["cat-file", "-e", `${historic.mergeBase}^{commit}`]);
   }
-  const resolved = await validateBase(repo.root, base);
+  // The original base remains immutable metadata; only the stored comparison
+  // endpoints are needed to reconstruct a historic branch comparison.
+  const resolved = historic ? base : await validateBase(repo.root, base);
   const mergeBase =
     historic?.mergeBase ??
     (await gitText(repo.root, ["merge-base", resolved, head]));
@@ -254,11 +256,21 @@ export async function getHistoricalReview(
 ): Promise<ReviewObservation> {
   if (entry.repositoryId !== repo.id || entry.mode !== "branch")
     throw new StaleReviewError();
-  const observation = await observe(repo, entry.base, "branch", entry);
-  if (observation.fingerprint !== entry.fingerprint)
+  try {
+    const observation = await observe(repo, entry.base, "branch", entry);
+    if (observation.fingerprint !== entry.fingerprint)
+      throw new StaleReviewError();
+    for (const f of observation.files)
+      for (const [oid, mode] of [
+        [f.oldOid, f.oldMode],
+        [f.newOid, f.newMode],
+      ])
+        // Gitlinks describe another repository. Never fetch or require its
+        // commits locally; retain their metadata with source display disabled.
+        if (oid && mode !== "160000")
+          await git(repo.root, ["cat-file", "-e", `${oid}^{blob}`]);
+    return { ...observation, id: randomUUID(), historical: true };
+  } catch {
     throw new StaleReviewError();
-  for (const f of observation.files)
-    for (const oid of [f.oldOid, f.newOid])
-      if (oid) await git(repo.root, ["cat-file", "-e", `${oid}^{blob}`]);
-  return { ...observation, id: randomUUID(), historical: true };
+  }
 }

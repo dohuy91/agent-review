@@ -1,4 +1,4 @@
-import { attachComment } from "../../../../packages/review/src/attachment.js";
+import { createAttachmentResolver } from "../../../../packages/review/src/attachment.js";
 import { unknownCodexProvider } from "../../../../packages/shared/src/index.js";
 import type { FastifyInstance } from "fastify";
 import { isDeepStrictEqual } from "node:util";
@@ -6,13 +6,11 @@ import type {
   Repository,
   AgentStart,
   ReviewExport,
-  AttachedComment,
 } from "../../../../packages/shared/src/index.js";
 import type { ReviewAccess } from "./reviews.js";
 import type { ReviewStore } from "../../../../packages/review/src/store.js";
 import { getProfiles } from "../../../../packages/review/src/profiles.js";
-import { attach, invalid } from "../../../../packages/review/src/anchors.js";
-import { getFileDiff } from "../../../../packages/git/src/diff.js";
+import { invalid } from "../../../../packages/review/src/anchors.js";
 import { SkillCatalog } from "../../../../packages/agents/src/skills.js";
 import { AgentManager } from "../../../../packages/agents/src/manager.js";
 import {
@@ -22,6 +20,7 @@ import {
   type ProcessFactory,
 } from "../../../../packages/agents/src/adapters.js";
 import { agentDefaults } from "../../../../packages/agents/src/defaults.js";
+class OpenCodeUnavailableError extends Error {}
 export function installAgentRoutes(
   app: FastifyInstance,
   repositories: Map<string, Repository>,
@@ -49,22 +48,21 @@ export function installAgentRoutes(
       import("../../../../packages/shared/src/index.js").AgentAvailability
     >
   >();
+  const probeExtra =
+    options.adapterAvailability ??
+    (options.processFactory
+      ? async (id: "claude" | "opencode") => ({
+          id,
+          available: true,
+          version: null,
+          error: null,
+        })
+      : adapterAvailability);
   const extra = (id: "claude" | "opencode") => {
-    if (!extraAvailability.has(id))
-      extraAvailability.set(
-        id,
-        (
-          options.adapterAvailability ??
-          (options.processFactory
-            ? async (id: "claude" | "opencode") => ({
-                id,
-                available: true,
-                version: null,
-                error: null,
-              })
-            : adapterAvailability)
-        )(id),
-      );
+    // OpenCode availability is a current safety decision, never UI-cache
+    // authorization. Every final execution validation probes it again.
+    if (id === "opencode") return probeExtra(id);
+    if (!extraAvailability.has(id)) extraAvailability.set(id, probeExtra(id));
     return extraAvailability.get(id)!;
   };
   let availability: ReturnType<typeof codexAvailability> | undefined;
@@ -139,7 +137,7 @@ export function installAgentRoutes(
         )
           throw conflict();
         await catalog.resolve(profile.effective);
-        const comments: AttachedComment[] = [];
+        const selected = [];
         for (const id of b.commentIds) {
           const c = store.list(r.id).find((c) => c.id === id);
           if (!c) throw invalid();
@@ -151,14 +149,23 @@ export function installAgentRoutes(
             c.worktreeRoot !== r.root
           )
             throw conflict();
-          const attached = await attachComment(r, o, c);
-          if (attached.attachment !== "current") throw conflict();
-          comments.push(attached);
+          selected.push(c);
         }
+        const comments = await createAttachmentResolver(r, o).attachAll(
+          selected,
+        );
+        if (comments.some((c) => c.attachment !== "current")) throw conflict();
 
         if (!isDeepStrictEqual(profile, getProfiles(store, r, o)))
           throw conflict();
         await catalog.resolve(profile.effective);
+        if (b.adapter === "opencode" && !options.processFactory) {
+          const current = await extra("opencode");
+          if (!current.available)
+            throw new OpenCodeUnavailableError(
+              current.error ?? "OpenCode CLI unavailable",
+            );
+        }
         await access.validateExecution(r.id, o.id);
         return {
           schemaVersion: 1,
@@ -168,22 +175,29 @@ export function installAgentRoutes(
           comments,
         };
       }
-      const context = await validate();
-      if (
-        !options.processFactory &&
-        !(
-          await (b.adapter === "codex"
-            ? (availability ??= (
-                options.agentAvailability ?? codexAvailability
-              )())
-            : extra(b.adapter))
-        ).available
-      )
-        throw Object.assign(new Error(`${b.adapter} unavailable`), {
-          statusCode: 503,
-        });
-      const text = await catalog.resolve(context.profile.effective!);
-      return reply.code(201).send(await manager.start(b, validate, text));
+      try {
+        const context = await validate();
+        if (
+          !options.processFactory &&
+          b.adapter !== "opencode" &&
+          !(
+            await (b.adapter === "codex"
+              ? (availability ??= (
+                  options.agentAvailability ?? codexAvailability
+                )())
+              : extra(b.adapter))
+          ).available
+        )
+          throw Object.assign(new Error(`${b.adapter} unavailable`), {
+            statusCode: 503,
+          });
+        const text = await catalog.resolve(context.profile.effective!);
+        return reply.code(201).send(await manager.start(b, validate, text));
+      } catch (error) {
+        if (error instanceof OpenCodeUnavailableError)
+          return reply.code(503).send({ error: error.message });
+        throw error;
+      }
     },
   );
   app.get<{ Params: { id: string; historyId: string } }>(

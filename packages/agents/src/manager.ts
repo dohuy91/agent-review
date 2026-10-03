@@ -13,6 +13,7 @@ import {
   type ProcessFactory,
 } from "./adapters.js";
 export const MAX_LOG_BYTES = 1024 * 1024;
+const MAX_EVENT_BYTES = 64 * 1024;
 interface Session {
   run: AgentRun;
   child: ChildProcessWithoutNullStreams;
@@ -179,39 +180,76 @@ export class AgentManager {
     let denied = false;
     let completed = false,
       failed = false,
-      pending = "";
-    const parse = (b: Buffer) => {
-      pending += b.toString();
-      let n: number;
-      while ((n = pending.indexOf("\n")) >= 0) {
-        const line = pending.slice(0, n);
-        pending = pending.slice(n + 1);
-        try {
-          const e = JSON.parse(line);
-          if (input.adapter === "codex" && e.type === "turn.completed")
-            completed = true;
-          if (input.adapter === "claude") {
+      pending = "",
+      pendingBytes = 0,
+      dropping = false,
+      integrityLost = false;
+    const parseEvent = (line: string) => {
+      try {
+        const e = JSON.parse(line);
+        if (input.adapter === "codex" && e.type === "turn.completed")
+          completed = true;
+        if (input.adapter === "claude") {
+          if (
+            e.subtype === "permission_denied" ||
+            (Array.isArray(e.permission_denials) && e.permission_denials.length)
+          )
+            denied = true;
+          if (e.type === "result") {
+            completed = e.subtype === "success" && !e.is_error;
+            if (e.is_error || e.subtype !== "success") failed = true;
+          }
+        }
+        if (input.adapter === "opencode") {
+          if (e.type === "tool_use" && e.part?.state?.status === "error") {
+            failed = true;
+            const error = e.part.state.error;
             if (
-              e.subtype === "permission_denied" ||
-              (Array.isArray(e.permission_denials) &&
-                e.permission_denials.length)
+              typeof error === "string" &&
+              (error.startsWith(
+                "The user rejected permission to use this specific tool call",
+              ) ||
+                error.startsWith(
+                  "The user has specified a rule which prevents you from using this specific tool call",
+                ))
             )
               denied = true;
-            if (e.type === "result") {
-              completed = e.subtype === "success" && !e.is_error;
-              if (e.is_error || e.subtype !== "success") failed = true;
-            }
           }
-          if (
-            input.adapter === "opencode" &&
-            e.type === "step_finish" &&
-            e.part?.reason === "stop"
-          )
+          if (e.type === "step_finish" && e.part?.reason === "stop")
             completed = true;
-          if (e.type === "turn.failed" || e.type === "error") failed = true;
-        } catch {}
+        }
+        if (e.type === "turn.failed" || e.type === "error") failed = true;
+      } catch {}
+    };
+    const parse = (b: Buffer) => {
+      const text = b.toString();
+      let offset = 0;
+      while (offset < text.length) {
+        const newline = text.indexOf("\n", offset);
+        const end = newline < 0 ? text.length : newline;
+        const part = text.slice(offset, end);
+        if (!dropping) {
+          const bytes = Buffer.byteLength(part, "utf8");
+          if (pendingBytes + bytes > MAX_EVENT_BYTES) {
+            // Losing an event's semantic integrity is sticky non-success.
+            // Drop only until its delimiter; never grow the parser buffer.
+            integrityLost = true;
+            failed = true;
+            dropping = true;
+            pending = "";
+            pendingBytes = 0;
+          } else {
+            pending += part;
+            pendingBytes += bytes;
+          }
+        }
+        if (newline < 0) break;
+        if (!dropping) parseEvent(pending);
+        pending = "";
+        pendingBytes = 0;
+        dropping = false;
+        offset = newline + 1;
       }
-      if (pending.length > 65536) pending = "";
     };
     const finish = (code: number | null, error: string | null) => {
       if (session.exited) return;
@@ -221,18 +259,22 @@ export class AgentManager {
       if (session.killTimer) clearTimeout(session.killTimer);
       run.exitCode = code;
       if (run.status === "running") {
-        run.status = denied
-          ? "needs-attention"
-          : code === 0 && !error && completed && !failed
-            ? "completed"
-            : "failed";
+        run.status = integrityLost
+          ? "failed"
+          : denied
+            ? "needs-attention"
+            : code === 0 && !error && completed && !failed
+              ? "completed"
+              : "failed";
         run.error =
           error ??
-          (run.status === "failed"
-            ? `${input.adapter} did not complete successfully`
-            : run.status === "needs-attention"
-              ? "Permission denied; manual permissions require attention"
-              : null);
+          (integrityLost
+            ? "Structured output event limit exceeded"
+            : run.status === "failed"
+              ? `${input.adapter} did not complete successfully`
+              : run.status === "needs-attention"
+                ? "Permission denied; manual permissions require attention"
+                : null);
         run.exitCode = code;
       }
       run.finishedAt = new Date().toISOString();
@@ -261,6 +303,10 @@ export class AgentManager {
     };
     child.stdout.on("data", (b: Buffer) => {
       if (run.status !== "running") return;
+      if (b.length > MAX_LOG_BYTES - session.bytes) {
+        output(b);
+        return;
+      }
       parse(b);
       output(b);
     });

@@ -603,7 +603,40 @@ test("historic branch comparison reopens pinned Git endpoints after HEAD advance
       })
     ).statusCode,
   ).toBe(403);
-  expect((await f.call('PUT','reviewed',{reviewId:old.id,path:'a.txt',reviewed:true})).statusCode).toBe(403);
-  expect((await f.call('PUT','profiles',{reviewId:old.id,scope:'worktree',profile:null})).statusCode).toBe(403);
+  const mutationStatuses = [
+    (
+      await f.call("PUT", "reviewed", {
+        reviewId: old.id,
+        path: "a.txt",
+        reviewed: true,
+      })
+    ).statusCode,
+    (
+      await f.call("PUT", "profiles", {
+        reviewId: old.id,
+        scope: "worktree",
+        profile: null,
+      })
+    ).statusCode,
+    (
+      await f.call("PATCH", `comments/${f.comment.id}?reviewId=${old.id}`, {
+        body: "historic edit",
+      })
+    ).statusCode,
+    (await f.call("DELETE", `comments/${f.comment.id}?reviewId=${old.id}`))
+      .statusCode,
+  ];
+  expect(mutationStatuses).toEqual([403, 403, 403, 403]);
+  expect(
+    (await f.call("GET", `comments?reviewId=${old.id}`)).json().comments[0]
+      .body,
+  ).toBe("Fix fixture");
+  expect(
+    (
+      await f.call("PATCH", `comments/${f.comment.id}`, {
+        body: "current lifecycle",
+      })
+    ).statusCode,
+  ).toBe(200);
   expect((await f.call("GET", "history/unknown/review")).statusCode).toBe(404);
 });

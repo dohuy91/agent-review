@@ -304,7 +304,12 @@ export default function AgentPanel({
           {c.body || c.id}
         </label>
       ))}
-      {!available && <small>Agent unavailable or writes disabled</small>}
+      {!available && (
+        <small>
+          {agents?.agents?.find((a) => a.id === adapter)?.error ||
+            "Agent unavailable or writes disabled"}
+        </small>
+      )}
       {!exact && (
         <small>Select an installed skill with the exact digest.</small>
       )}

@@ -367,3 +367,42 @@ test("adapter selection exposes truthful Claude permissions and OpenCode process
   });
   expect(screen.getByText(/manual permissions/i)).toBeTruthy();
 });
+test("unverified OpenCode version shows actionable unavailable reason and blocks Send", async () => {
+  const reason =
+    "OpenCode unavailable: no-sharing control is verified only for 1.18.31; use that version or another adapter";
+  vi.stubGlobal("fetch", async (url: string) => ({
+    ok: true,
+    json: async () =>
+      url === "/api/agents"
+        ? {
+            agents: [
+              {
+                id: "opencode",
+                available: false,
+                version: "1.18.32",
+                error: reason,
+              },
+            ],
+            writesEnabled: true,
+          }
+        : { skills: [] },
+  }));
+  render(
+    <AgentPanel
+      repositoryId="repo"
+      reviewId="r"
+      comments={[]}
+      profile={null}
+      onProfile={() => {}}
+    />,
+  );
+  await screen.findByRole("option", { name: /opencode/i });
+  fireEvent.change(screen.getByLabelText("Agent adapter"), {
+    target: { value: "opencode" },
+  });
+  expect(screen.getByText(reason)).toBeTruthy();
+  expect(
+    (screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement)
+      .disabled,
+  ).toBe(true);
+});

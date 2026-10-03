@@ -3,14 +3,105 @@ import type {
   ReviewObservation,
   ReviewComment,
   AttachedComment,
+  FileDiff,
 } from "../../shared/src/index.js";
 import { attach, makeAnchor } from "./anchors.js";
 import { getFileDiff } from "../../git/src/diff.js";
 import { git } from "../../git/src/git.js";
+const MAX_ATTACHMENT_WORK = 4;
+interface AttachmentWork {
+  diff(path: string): Promise<FileDiff>;
+  historical(oid: string): Promise<AttachedComment["historicalContent"]>;
+}
+// All caches belong to one observation validation pass. In-flight promises are
+// stored before work starts, and the scheduler bounds both diff and object work.
+export function createAttachmentResolver(
+  repository: Repository,
+  observation: ReviewObservation,
+) {
+  const diffs = new Map<string, Promise<FileDiff>>();
+  const objects = new Map<
+    string,
+    Promise<AttachedComment["historicalContent"]>
+  >();
+  let active = 0;
+  const queued: (() => void)[] = [];
+  function pump() {
+    while (active < MAX_ATTACHMENT_WORK && queued.length) queued.shift()!();
+  }
+  function bounded<T>(task: () => Promise<T>): Promise<T> {
+    return new Promise((resolve, reject) => {
+      queued.push(() => {
+        active++;
+        task()
+          .then(resolve, reject)
+          .finally(() => {
+            active--;
+            pump();
+          });
+      });
+      pump();
+    });
+  }
+  const work: AttachmentWork = {
+    diff(path) {
+      if (!diffs.has(path))
+        diffs.set(
+          path,
+          bounded(() => getFileDiff(repository, observation, path)),
+        );
+      return diffs.get(path)!;
+    },
+    historical(oid) {
+      if (!objects.has(oid))
+        objects.set(
+          oid,
+          bounded(async () => {
+            try {
+              await git(repository.root, ["cat-file", "-e", `${oid}^{blob}`]);
+              return "available" as const;
+            } catch {
+              return "unavailable" as const;
+            }
+          }),
+        );
+      return objects.get(oid)!;
+    },
+  };
+  const resolve = (comment: ReviewComment) =>
+    attachWithWork(repository, observation, comment, work);
+  return {
+    attach: resolve,
+    async attachAll(comments: ReviewComment[]) {
+      const result: AttachedComment[] = new Array(comments.length);
+      let next = 0;
+      await Promise.all(
+        Array.from(
+          { length: Math.min(MAX_ATTACHMENT_WORK, comments.length) },
+          async () => {
+            while (next < comments.length) {
+              const index = next++;
+              result[index] = await resolve(comments[index]!);
+            }
+          },
+        ),
+      );
+      return result;
+    },
+  };
+}
 export async function attachComment(
   repository: Repository,
   observation: ReviewObservation,
   comment: ReviewComment,
+): Promise<AttachedComment> {
+  return createAttachmentResolver(repository, observation).attach(comment);
+}
+async function attachWithWork(
+  repository: Repository,
+  observation: ReviewObservation,
+  comment: ReviewComment,
+  work: AttachmentWork,
 ): Promise<AttachedComment> {
   let attachedRange = null;
   let attachedPath: string | null = null;
@@ -26,7 +117,7 @@ export async function attachComment(
     comment.base === observation.base &&
     comment.branch === observation.branch
   ) {
-    const diff = await getFileDiff(repository, observation, file.path);
+    const diff = await work.diff(file.path);
     const content = comment.side === "old" ? diff.oldContent : diff.newContent;
     if (
       content !== null &&
@@ -49,14 +140,7 @@ export async function attachComment(
   }
   let historicalContent: AttachedComment["historicalContent"] = "unavailable";
   if (comment.sourceOid && /^[0-9a-f]{40,64}$/.test(comment.sourceOid)) {
-    try {
-      await git(repository.root, [
-        "cat-file",
-        "-e",
-        `${comment.sourceOid}^{blob}`,
-      ]);
-      historicalContent = "available";
-    } catch {}
+    historicalContent = await work.historical(comment.sourceOid);
   }
   return {
     ...comment,

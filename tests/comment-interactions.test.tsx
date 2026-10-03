@@ -10,6 +10,15 @@ import {
   within,
 } from "@testing-library/react";
 import App from "../apps/web/src/App.js";
+import {
+  chooseTheme,
+  selectedTheme,
+  openProfiles,
+  chooseBase,
+  advancedBase,
+  openFileActions,
+  selectedProject,
+} from "./workspace-helpers.js";
 afterEach(() => {
   cleanup();
   localStorage.clear();
@@ -104,6 +113,13 @@ function fixture() {
       data = { profiles: {}, effective: null, revision: 0 };
     else if (route.includes("/reviewed")) data = { files: [] };
     else if (route.endsWith("/history")) data = { reviews: [], runs: [] };
+    else if (route.endsWith("/project-settings"))
+      data = {
+        repositoryId: "repo",
+        projectId: "project",
+        revision: 0,
+        settings: { startingFolder: "/fixture", adapter: "codex", skill: null },
+      };
     else if (route.endsWith("/remotes")) data = { remotes: [] };
     return { ok: true, status: 200, json: async () => data };
   });
@@ -137,16 +153,17 @@ test("sidebar composer remains reachable across note collapse and Files/Notes sw
   expect(body().value).toBe("Keep draft through collapse");
   fireEvent.click(screen.getByRole("button", { name: "Files" }));
   expect(body().value).toBe("Keep draft through collapse");
-  fireEvent.click(screen.getByRole("button", { name: "Comments 0" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review Comments 0" }));
   expect(
     (screen.getByLabelText("Comment severity") as HTMLSelectElement).value,
   ).toBe("warning");
-  for (const name of ["Git actions", "Fix with agent 0"]) {
-    const group = screen.getByRole("button", { name });
-    expect(group.getAttribute("aria-controls")).toBeTruthy();
-    fireEvent.click(group);
-    expect(group.getAttribute("aria-expanded")).toBe("false");
-  }
+  expect(
+    within(document.querySelector(".aux") as HTMLElement).queryByRole(
+      "region",
+      { name: "Git actions" },
+    ),
+  ).toBeNull();
+  expect(screen.getByRole("button", { name: "Fix with Agent" })).toBeTruthy();
 });
 
 test("inline old range composer shares one draft with sidebar and view switches, then saves exact target", async () => {
@@ -156,7 +173,6 @@ test("inline old range composer shares one draft with sidebar and view switches,
   fireEvent.click(screen.getByRole("button", { name: "old line 2" }), {
     shiftKey: true,
   });
-  fireEvent.click(screen.getByRole("button", { name: "Comment inline" }));
   const inline = screen.getByTestId("inline-comment-composer");
   expect(inline.contains(body())).toBe(true);
   expect(inline.getAttribute("data-line")).toBe("2");
@@ -208,7 +224,6 @@ test("saved inline marker expands common edit/resolve lifecycle and sidebar sync
   const writes = fixture();
   await load();
   fireEvent.click(screen.getByRole("button", { name: "new line 2" }));
-  fireEvent.click(screen.getByRole("button", { name: "Comment inline" }));
   fireEvent.change(body(), { target: { value: "Inline saved" } });
   fireEvent.click(screen.getByRole("button", { name: "Save comment" }));
   const marker = await screen.findByRole("button", {
@@ -233,7 +248,7 @@ test("saved inline marker expands common edit/resolve lifecycle and sidebar sync
   await waitFor(() =>
     expect(within(thread).getByRole("button", { name: "Reopen" })).toBeTruthy(),
   );
-  fireEvent.click(screen.getByRole("button", { name: "Comments 1" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review Comments 1" }));
   expect(
     within(document.querySelector(".aux") as HTMLElement).getByRole("button", {
       name: "Reopen",
@@ -245,7 +260,6 @@ test("explicit retarget preserves body/severity and updates the shared inline/si
   const writes = fixture();
   await load();
   fireEvent.click(screen.getByRole("button", { name: "old line 2" }));
-  fireEvent.click(screen.getByRole("button", { name: "Comment inline" }));
   fireEvent.change(body(), { target: { value: "Move this deliberately" } });
   fireEvent.change(screen.getByLabelText("Comment severity"), {
     target: { value: "warning" },
@@ -284,7 +298,6 @@ test("typing while an inline save is pending cannot clear newer draft text or se
   });
   await load();
   fireEvent.click(screen.getByRole("button", { name: "new line 2" }));
-  fireEvent.click(screen.getByRole("button", { name: "Comment inline" }));
   fireEvent.change(body(), { target: { value: "First snapshot" } });
   fireEvent.click(screen.getByRole("button", { name: "Save comment" }));
   await waitFor(() => expect(started).toBe(true));
@@ -324,7 +337,6 @@ test("inline live refresh keeps the draft reachable in the sidebar and requires 
   );
   await load();
   fireEvent.click(screen.getByRole("button", { name: "old line 2" }));
-  fireEvent.click(screen.getByRole("button", { name: "Comment inline" }));
   fireEvent.change(body(), { target: { value: "Retain inline watch draft" } });
   fireEvent.change(screen.getByLabelText("Comment severity"), {
     target: { value: "error" },
@@ -344,6 +356,7 @@ test("inline live refresh keeps the draft reachable in the sidebar and requires 
     ).toBe(false),
   );
   fireEvent.click(screen.getByRole("button", { name: "new line 3" }));
+  fireEvent.click(screen.getByRole("button", { name: "Use selected lines" }));
   fireEvent.click(screen.getByRole("button", { name: "Continue inline" }));
   expect(
     screen.getByTestId("inline-comment-composer").getAttribute("data-line"),
@@ -364,9 +377,7 @@ test("desktop pane controls persist widths without losing appearance settings an
   fireEvent.keyDown(left, { key: "ArrowRight" });
   expect(left.getAttribute("aria-valuenow")).toBe("215");
   fireEvent.click(screen.getByRole("button", { name: "Split" }));
-  fireEvent.change(screen.getByRole("combobox", { name: "Theme" }), {
-    target: { value: "dark" },
-  });
+  chooseTheme("dark");
   const saved = JSON.parse(
     localStorage.getItem("agent-review.preferences.v1")!,
   );
@@ -421,7 +432,6 @@ test("an edited inline note retains its draft across collapse, pane and theme sw
   fixture();
   await load();
   fireEvent.click(screen.getByRole("button", { name: "new line 2" }));
-  fireEvent.click(screen.getByRole("button", { name: "Comment inline" }));
   fireEvent.change(body(), { target: { value: "Saved before editing" } });
   fireEvent.click(screen.getByRole("button", { name: "Save comment" }));
   fireEvent.click(
@@ -438,9 +448,7 @@ test("an edited inline note retains its draft across collapse, pane and theme sw
   fireEvent.click(screen.getByRole("button", { name: "Comment in sidebar" }));
   fireEvent.click(screen.getByRole("button", { name: "Review notes 1" }));
   fireEvent.click(screen.getByRole("button", { name: "Files" }));
-  fireEvent.change(screen.getByRole("combobox", { name: "Theme" }), {
-    target: { value: "dark" },
-  });
+  chooseTheme("dark");
   fireEvent.click(screen.getByRole("button", { name: "Split" }));
   expect(body().value).toBe("Unsaved edited draft");
   expect(
@@ -464,7 +472,6 @@ test("pending refresh disables an edited note save while preserving its text", a
   });
   await load();
   fireEvent.click(screen.getByRole("button", { name: "new line 2" }));
-  fireEvent.click(screen.getByRole("button", { name: "Comment inline" }));
   fireEvent.change(body(), { target: { value: "Before refresh" } });
   fireEvent.click(screen.getByRole("button", { name: "Save comment" }));
   fireEvent.click(

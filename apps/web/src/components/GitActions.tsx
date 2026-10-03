@@ -41,6 +41,7 @@ export default forwardRef<
     onRefresh: () => void;
     onDialogChange: (open: boolean) => void;
     onWritableChange: (enabled: boolean) => void;
+    compact?: boolean;
   }
 >(function GitActions(
   {
@@ -52,6 +53,7 @@ export default forwardRef<
     onRefresh,
     onDialogChange,
     onWritableChange,
+    compact = false,
   },
   ref,
 ) {
@@ -401,52 +403,56 @@ export default forwardRef<
           </button>
         </div>
       )}
-      <strong>Remotes</strong>
-      <small>
-        Metadata is offline. Fetch uses your existing local HTTPS/SSH
-        authentication and changes remote-tracking refs.
-      </small>
-      {remotes.length ? (
+      {!compact && (
         <>
-          <label>
-            Remote
-            <select
-              aria-label="Fetch remote"
-              value={remote}
-              onChange={(e) => setRemote(e.target.value)}
-            >
+          <strong>Remotes</strong>
+          <small>
+            Metadata is offline. Fetch uses your existing local HTTPS/SSH
+            authentication and changes remote-tracking refs.
+          </small>
+          {remotes.length ? (
+            <>
+              <label>
+                Remote
+                <select
+                  aria-label="Fetch remote"
+                  value={remote}
+                  onChange={(e) => setRemote(e.target.value)}
+                >
+                  {remotes.map((item) => (
+                    <option key={item.name} value={item.name}>
+                      {item.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
               {remotes.map((item) => (
-                <option key={item.name} value={item.name}>
-                  {item.name}
-                </option>
+                <div className="remote-metadata" key={item.name}>
+                  <strong>{item.name}</strong>
+                  <span>{item.url}</span>
+                  <small>{item.transport}</small>
+                  {item.reason && <small>{item.reason}</small>}
+                </div>
               ))}
-            </select>
-          </label>
-          {remotes.map((item) => (
-            <div className="remote-metadata" key={item.name}>
-              <strong>{item.name}</strong>
-              <span>{item.url}</span>
-              <small>{item.transport}</small>
-              {item.reason && <small>{item.reason}</small>}
-            </div>
-          ))}
-          <button disabled={!canFetch} onClick={fetchRemote}>
-            Fetch {remote}
-          </button>
+              <button disabled={!canFetch} onClick={fetchRemote}>
+                Fetch {remote}
+              </button>
+            </>
+          ) : (
+            <small>No configured remotes</small>
+          )}
+          <PushActions
+            ref={pushActions}
+            repository={repository}
+            review={review}
+            enabled={reviewReady && !!capabilities?.writesEnabled && !busy}
+            remotes={remotes.map((item) => item.name)}
+            comparisonDestinations={comparisonDestinations}
+            onRefresh={onRefresh}
+            onDialogChange={setPushDialog}
+          />
         </>
-      ) : (
-        <small>No configured remotes</small>
       )}
-      <PushActions
-        ref={pushActions}
-        repository={repository}
-        review={review}
-        enabled={reviewReady && !!capabilities?.writesEnabled && !busy}
-        remotes={remotes.map((item) => item.name)}
-        comparisonDestinations={comparisonDestinations}
-        onRefresh={onRefresh}
-        onDialogChange={setPushDialog}
-      />
       {status && <p role="status">{status}</p>}
       {error && <p role="alert">{error}</p>}
       {preview &&

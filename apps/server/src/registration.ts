@@ -54,6 +54,29 @@ export class RegistrationStore {
         identity,
       );
   }
+  /** Synchronous authorization proof for lifecycle services; never re-observe live paths here. */
+  expectedPhysicalIdentity(repo: Repository): string | null {
+    const row = this.db
+      .prepare(
+        "SELECT root,git_dir,common_dir,project_id,identity FROM registered_roots WHERE id=?",
+      )
+      .get(repo.id) as
+      | {
+          root: string;
+          git_dir: string;
+          common_dir: string;
+          project_id: string;
+          identity: string;
+        }
+      | undefined;
+    return row &&
+      row.root === repo.root &&
+      row.git_dir === repo.gitDir &&
+      row.common_dir === repo.commonDir &&
+      row.project_id === repo.projectId
+      ? row.identity
+      : null;
+  }
   select(id: string) {
     this.db
       .prepare(

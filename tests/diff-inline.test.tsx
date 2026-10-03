@@ -519,3 +519,16 @@ test("readonly historical markers can expand default content without mutation co
   for (const name of ["Edit", "Resolve", "Delete", "Save comment"])
     expect(screen.queryByRole("button", { name })).toBeNull();
 });
+
+test("CRLF conflict source keeps seven CodeMirror lines and exact inline partitions", () => {
+  const rawLines = ["before", "<<<<<<< HEAD", "ours", "=======", "theirs", ">>>>>>> origin/main", "after"];
+  const conflict: FileDiff = {...diff, oldContent: null, newContent: rawLines.join("\r\n") + "\r\n", hunks: [{oldStart: 0, oldCount: 0, newStart: 1, newCount: rawLines.length, lines: rawLines.map((text, index) => ({type: "add", text: text + "\r", oldLine: null, newLine: index + 1}))}]};
+  const view = render(<DiffView {...defaults} diff={conflict}/>);
+  expect([...screen.getByTestId("diff").querySelectorAll(".cm-line")].map((line) => line.textContent)).toEqual(rawLines);
+  view.rerender(<DiffView {...defaults} diff={conflict} selection={{side: "new", startLine: 3, endLine: 3, anchor: 3}} inlineContent={<textarea aria-label="Conflict note"/>}/>);
+  const row = screen.getByLabelText("Conflict note").closest(".inline-diff-row")!;
+  expect([...row.previousElementSibling!.querySelectorAll(".cm-line")].map((line) => line.textContent)).toEqual(rawLines.slice(0, 3));
+  expect([...row.nextElementSibling!.querySelectorAll(".cm-line")].map((line) => line.textContent)).toEqual(rawLines.slice(3));
+  expect(screen.queryByRole("button", {name: "old line 1"})).toBeNull();
+  expect(conflict.newContent).toBe(rawLines.join("\r\n") + "\r\n");
+});

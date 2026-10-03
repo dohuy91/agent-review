@@ -167,6 +167,74 @@ export async function writeBranchGit(
     !stashing,
   );
 }
+/** Fixed merge lifecycle porcelain only; caller owns exact-state preview revalidation. */
+export async function writeMergeGit(
+  repo: Repository,
+  operation: "pull" | "continue" | "abort",
+  head?: string,
+): Promise<Buffer> {
+  if (
+    !["pull", "continue", "abort"].includes(operation) ||
+    (operation === "pull" && !/^[a-f0-9]{40,64}$/.test(head ?? ""))
+  )
+    throw new GitActionError("Unsupported merge operation");
+  const actual = await validateIdentity(repo);
+  if (!actual.branch?.startsWith("refs/heads/"))
+    throw new GitActionError(
+      "Select a checked-out local branch before merging",
+    );
+  await validateWriteDestinations(repo, {
+    objects: true,
+    branch: actual.branch,
+  });
+  const args =
+    operation === "pull"
+      ? [
+          "merge",
+          "--no-edit",
+          "--no-stat",
+          "--no-progress",
+          "--no-autostash",
+          "--no-overwrite-ignore",
+          "--no-gpg-sign",
+          "--strategy=ort",
+          "--",
+          head!,
+        ]
+      : operation === "continue"
+        ? ["commit", "--no-edit", "--no-gpg-sign", "--no-verify"]
+        : ["merge", "--abort"];
+  return executeWriteGit(repo, args, undefined, undefined, [
+    "-c",
+    "submodule.recurse=false",
+    "-c",
+    "gc.auto=0",
+    "-c",
+    "maintenance.auto=false",
+    "-c",
+    "rerere.enabled=false",
+    "-c",
+    "rerere.autoupdate=false",
+    "-c",
+    "merge.autoStash=false",
+    "-c",
+    "merge.stat=false",
+    "-c",
+    "merge.renormalize=false",
+    "-c",
+    "core.trustctime=true",
+    "-c",
+    "core.checkStat=default",
+    "-c",
+    "core.ignoreStat=false",
+    "-c",
+    "core.fileMode=true",
+    "-c",
+    "core.editor=true",
+    "-c",
+    "sequence.editor=true",
+  ]);
+}
 async function executeWriteGit(
   repo: Repository,
   args: string[],

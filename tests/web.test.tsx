@@ -10,6 +10,15 @@ import {
   within,
 } from "@testing-library/react";
 import App from "../apps/web/src/App.js";
+import {
+  chooseTheme,
+  selectedTheme,
+  openProfiles,
+  chooseBase,
+  advancedBase,
+  openFileActions,
+  selectedProject,
+} from "./workspace-helpers.js";
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
@@ -94,6 +103,13 @@ function fixture() {
       };
     else if (String(url).includes("/profiles"))
       data = { profiles: {}, effective: null, source: null, revision: 0 };
+    else if (String(url).endsWith("/project-settings"))
+      data = {
+        repositoryId: "repo",
+        projectId: "project",
+        revision: 0,
+        settings: { startingFolder: "/fixture", adapter: "codex", skill: null },
+      };
     return { ok: true, status: 200, json: async () => data };
   });
   return calls;
@@ -125,9 +141,7 @@ test("lazy selected diff, deleted old-side range, comment payload and appearance
   );
   fireEvent.click(screen.getByRole("button", { name: "Split" }));
   expect(screen.getByTestId("diff").classList.contains("split")).toBe(true);
-  fireEvent.change(screen.getByRole("combobox", { name: "Theme" }), {
-    target: { value: "dark" },
-  });
+  chooseTheme("dark");
   expect(document.documentElement.dataset.theme).toBe("dark");
   expect(getComputedStyle(document.querySelector(".cm-line span")!).color).toBe(
     "rgb(199, 146, 234)",
@@ -151,9 +165,22 @@ test("keyboard leaves typing alone and selects next file outside inputs; mode re
   await waitFor(() =>
     expect(calls.some((c) => c.url.includes("mode=staged"))).toBe(true),
   );
+  await waitFor(() =>
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "Fix with Agent",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(false),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Fix with Agent" }));
   expect(
-    (screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement)
-      .disabled,
+    (
+      (await screen.findByRole("button", {
+        name: "Send to agent",
+      })) as HTMLButtonElement
+    ).disabled,
   ).toBe(true);
 });
 test("drawer edit resolve reopen severity and delete use scoped lifecycle contracts", async () => {
@@ -194,7 +221,7 @@ test("drawer edit resolve reopen severity and delete use scoped lifecycle contra
   });
   render(<App />);
   await screen.findByRole("button", { name: "old line 1" });
-  fireEvent.click(screen.getByRole("button", { name: "Comments 1" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review Comments 1" }));
   fireEvent.click(screen.getByRole("button", { name: "Edit" }));
   fireEvent.change(screen.getByLabelText("Comment body"), {
     target: { value: "Edited body" },
@@ -223,7 +250,7 @@ test("reviewed status refresh resets and profile saves explicit scope locator di
   await screen.findByRole("button", { name: "✓ Reviewed" });
   fireEvent.click(screen.getByRole("button", { name: "Refresh review" }));
   await screen.findByRole("button", { name: "○ Mark reviewed" });
-  fireEvent.click(screen.getByRole("button", { name: "Fix profiles" }));
+  openProfiles();
   fireEvent.change(screen.getByLabelText("Profile scope"), {
     target: { value: "worktree" },
   });
@@ -285,7 +312,7 @@ test("saved history stays outside current review navigation", async () => {
   await screen.findByRole("button", { name: "old line 1" });
   expect(screen.queryByText("Review history")).toBeNull();
   expect(calls.some((call) => call.url.includes("/history"))).toBe(false);
-  fireEvent.click(screen.getByRole("button", { name: "Comments 1" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review Comments 1" }));
   expect(screen.getByRole("button", { name: "Edit" })).toBeTruthy();
   expect(
     (screen.getByRole("button", { name: "Add comment" }) as HTMLButtonElement)
@@ -329,7 +356,9 @@ test("late comment follow-up cannot replace a refreshed observation", async () =
   await screen.findByRole("button", { name: "old line 1" });
   held.resolve({ comments: [savedNote] });
   await new Promise((resolve) => setTimeout(resolve, 0));
-  expect(screen.getByRole("button", { name: "Comments 0" })).toBeTruthy();
+  expect(
+    screen.getByRole("button", { name: "Review Comments 0" }),
+  ).toBeTruthy();
 });
 test("reviewed rapid clicks serialize and consume authoritative result", async () => {
   fixture();
@@ -367,7 +396,7 @@ test("late reviewed and profile results cannot replace a changed mode", async ()
   render(<App />);
   await screen.findByRole("button", { name: "old line 1" });
   fireEvent.click(screen.getByRole("button", { name: "○ Mark reviewed" }));
-  fireEvent.click(screen.getByRole("button", { name: "Fix profiles" }));
+  openProfiles();
   fireEvent.change(screen.getByLabelText("Skill locator"), {
     target: { value: "skill://old" },
   });
@@ -404,7 +433,7 @@ test("edit resets on file navigation, Add starts new draft, Escape clears editin
   );
   render(<App />);
   await screen.findByRole("button", { name: "old line 1" });
-  fireEvent.click(screen.getByRole("button", { name: "Comments 1" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review Comments 1" }));
   fireEvent.click(screen.getByRole("button", { name: "Edit" }));
   fireEvent.keyDown(document, { key: "j" });
   await waitFor(() =>
@@ -472,7 +501,7 @@ test("all notes exposes outdated files absent from changed list and lifecycle ac
   );
   render(<App />);
   await screen.findByRole("button", { name: "old line 1" });
-  fireEvent.click(screen.getByRole("button", { name: "Comments 1" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review Comments 1" }));
   fireEvent.click(screen.getByRole("button", { name: "All notes" }));
   expect(screen.getByText("clean.ts")).toBeTruthy();
   expect(screen.getByText("Existing note")).toBeTruthy();
@@ -493,20 +522,20 @@ test("composer focuses for typing and Escape from input restores focus; modal co
   fireEvent.keyDown(screen.getByLabelText("Comment body"), { key: "Escape" });
   expect(screen.queryByLabelText("Comment body")).toBeNull();
   expect(document.activeElement).toBe(add);
-  const open = screen.getByRole("button", { name: "Fix profiles" });
+  const open = screen.getByRole("button", { name: "Project settings" });
   open.focus();
   fireEvent.click(open);
   const dialog = screen.getByRole("dialog");
   expect(dialog.contains(document.activeElement)).toBe(true);
   fireEvent.keyDown(document.activeElement!, { key: "j" });
   expect(calls.filter((c) => c.url.includes("/diff?"))).toHaveLength(1);
-  const last = screen.getByRole("button", { name: "Remove override" });
+  const last = within(dialog).getByRole("button", { name: "Cancel" });
   last.focus();
   fireEvent.keyDown(last, { key: "Tab" });
   expect(document.activeElement).toBe(dialog.querySelector(".modal-close"));
   fireEvent.keyDown(document.activeElement!, { key: "Tab", shiftKey: true });
   expect(document.activeElement).toBe(last);
-  fireEvent.keyDown(screen.getByLabelText("Skill locator"), { key: "Escape" });
+  fireEvent.keyDown(dialog, { key: "Escape" });
   expect(screen.queryByRole("dialog")).toBeNull();
   expect(document.activeElement).toBe(open);
 });
@@ -550,7 +579,7 @@ test.each(["edit", "create"])(
     });
     render(<App />);
     await screen.findByRole("button", { name: "old line 1" });
-    fireEvent.click(screen.getByRole("button", { name: "Comments 2" }));
+    fireEvent.click(screen.getByRole("button", { name: "Review Comments 2" }));
     if (kind === "edit")
       fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[0]);
     else {
@@ -844,6 +873,7 @@ test("retained old gutter cannot save under fresh review while fresh diff is pen
       .disabled,
   ).toBe(true);
   fireEvent.click(screen.getByRole("button", { name: "new line 1" }));
+  fireEvent.click(screen.getByRole("button", { name: "Use selected lines" }));
   fireEvent.click(screen.getByRole("button", { name: "Save comment" }));
   await waitFor(() =>
     expect(
@@ -880,22 +910,40 @@ test("agent confirmation Escape preserves draft and restores main modal keyboard
             ],
             writesEnabled: true,
           }
-        : u === "/api/skills"
-          ? { skills: [{ name: "Exact", locator: "exact", digest: "d" }] }
-          : u.includes("/profiles?")
-            ? profile
-            : u.includes("/comments?")
-              ? { comments: [savedNote] }
-              : u.includes("/export?")
-                ? {
-                    target: {
-                      worktreeRoot: "/fixture",
-                      branch: "main",
-                      head: "full-fixture-head",
-                    },
-                    profile,
-                  }
-                : undefined;
+        : u.endsWith("/project-settings")
+          ? {
+              repositoryId: "repo",
+              projectId: "project",
+              revision: 1,
+              settings: {
+                startingFolder: "/fixture",
+                adapter: "codex",
+                skill: { locator: "exact", digest: "d" },
+              },
+            }
+          : u.includes("/skills?")
+            ? { skills: [{ name: "Exact", locator: "exact", digest: "d" }] }
+            : u.includes("/profiles?")
+              ? profile
+              : u.includes("/comments?")
+                ? { comments: [savedNote] }
+                : u.includes("/agent-context?")
+                  ? {
+                      target: {
+                        worktreeRoot: "/fixture",
+                        branch: "main",
+                        head: "full-fixture-head",
+                      },
+                      profile,
+                      execution: {
+                        startingFolder: "/fixture",
+                        folderStamp: "stamp",
+                        settingsRevision: 1,
+                        adapter: "codex",
+                        skill: { locator: "exact", digest: "d" },
+                      },
+                    }
+                  : undefined;
     return data === undefined
       ? original(url, opts)
       : { ok: true, json: async () => data };
@@ -906,6 +954,8 @@ test("agent confirmation Escape preserves draft and restores main modal keyboard
   fireEvent.change(screen.getByLabelText("Comment body"), {
     target: { value: "Preserve on Escape" },
   });
+  const trigger = screen.getByRole("button", { name: "Fix with Agent" });
+  fireEvent.click(trigger);
   fireEvent.click(
     within(screen.getByRole("region", { name: "Agent controls" })).getByRole(
       "checkbox",
@@ -932,5 +982,5 @@ test("agent confirmation Escape preserves draft and restores main modal keyboard
   expect(
     (screen.getByLabelText("Comment body") as HTMLTextAreaElement).value,
   ).toBe("Preserve on Escape");
-  expect(document.activeElement).toBe(send);
+  expect(document.activeElement).toBe(trigger);
 });

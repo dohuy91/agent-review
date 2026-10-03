@@ -7,11 +7,13 @@ import type {
 /** One editor model survives drawer/tab/view/surface changes. */
 export function useCommentDraft({
   revision,
+  scope = "default",
   onSave,
   onUpdate,
   onComplete,
 }: {
   revision: number;
+  scope?: string;
   onSave: (body: string, severity: CommentSeverity) => Promise<boolean>;
   onUpdate: (id: string, patch: unknown) => Promise<boolean>;
   onComplete: () => void;
@@ -31,6 +33,30 @@ export function useCommentDraft({
     setEditing(null);
     setBusy(false);
   }
+  const drafts = useRef(
+    new Map<
+      string,
+      { body: string; severity: CommentSeverity; editing: string | null }
+    >(),
+  );
+  const previousScope = useRef(scope);
+  const snapshot = useRef({ body, severity, editing });
+  useLayoutEffect(() => {
+    if (previousScope.current !== scope) {
+      drafts.current.set(previousScope.current, snapshot.current);
+      const saved = drafts.current.get(scope);
+      version.current++;
+      action.current++;
+      setBody(saved?.body ?? "");
+      setSeverity(saved?.severity ?? "info");
+      setEditing(saved?.editing ?? null);
+      setBusy(false);
+      previousScope.current = scope;
+    }
+  }, [scope]);
+  useLayoutEffect(() => {
+    snapshot.current = { body, severity, editing };
+  });
   useLayoutEffect(clear, [revision]);
   useLayoutEffect(() => {
     alive.current = true;

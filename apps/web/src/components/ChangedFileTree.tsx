@@ -21,6 +21,7 @@ export interface ChangedFileTreeProps {
   filter?: ChangedFileFilter;
   onFilterChange?: (filter: ChangedFileFilter) => void;
   loading?: boolean;
+  conflicts?: string[];
 }
 const statusNames: Record<string, string> = {
   A: "Added",
@@ -65,7 +66,9 @@ export default function ChangedFileTree({
   filter: controlledFilter,
   onFilterChange,
   loading = false,
+  conflicts = [],
 }: ChangedFileTreeProps) {
+  const [query, setQuery] = useState("");
   const [localFilter, setLocalFilter] = useState<ChangedFileFilter>("all");
   const filter = controlledFilter ?? localFilter;
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
@@ -86,12 +89,68 @@ export default function ChangedFileTree({
     () =>
       files.filter(
         (file) =>
-          filter === "all" ||
-          reviewed.has(file.path) === (filter === "reviewed"),
+          file.path.toLocaleLowerCase().includes(query.toLocaleLowerCase()) &&
+          (filter === "all" ||
+            reviewed.has(file.path) === (filter === "reviewed")),
       ),
-    [files, filter, reviewed],
+    [files, filter, reviewed, query],
   );
-  const tree = useMemo(() => buildChangedFileTree(filtered), [filtered]);
+  const conflictSet = useMemo(
+    () =>
+      new Set([
+        ...conflicts,
+        ...files
+          .filter((file) => file.kind === "conflict" || file.status === "U")
+          .map((file) => file.path),
+      ]),
+    [conflicts.join("\0"), files],
+  );
+  const tree = useMemo(() => {
+    if (!conflictSet.size) return buildChangedFileTree(filtered);
+    const group = (
+      name: string,
+      path: string,
+      members: ReviewFile[],
+    ): ChangedFileNode => {
+      const children = buildChangedFileTree(members);
+      const prefixFolders = (nodes: ChangedFileNode[]) =>
+        nodes.forEach((node) => {
+          if (node.type === "folder") {
+            node.id = `${path}:${node.id}`;
+            prefixFolders(node.children);
+          }
+        });
+      prefixFolders(children);
+      return {
+        id: `group:${path}`,
+        group: true,
+        type: "folder",
+        name,
+        path,
+        file: null,
+        children,
+        fileCount: members.length,
+        addedLines: children.every((node) => node.addedLines !== null)
+          ? children.reduce((sum, node) => sum + node.addedLines!, 0)
+          : null,
+        deletedLines: children.every((node) => node.deletedLines !== null)
+          ? children.reduce((sum, node) => sum + node.deletedLines!, 0)
+          : null,
+      };
+    };
+    return [
+      group(
+        "Conflicts",
+        "__conflicts__",
+        filtered.filter((file) => conflictSet.has(file.path)),
+      ),
+      group(
+        "Other changes",
+        "__other_changes__",
+        filtered.filter((file) => !conflictSet.has(file.path)),
+      ),
+    ].filter((node) => node.fileCount);
+  }, [filtered, conflictSet]);
   const visible = useMemo(
     () => visibleFileNodes(tree, collapsed),
     [tree, collapsed],
@@ -118,7 +177,22 @@ export default function ChangedFileTree({
       const ancestors = fileAncestorPaths(selected);
       setCollapsed(
         (previous) =>
-          new Set([...previous].filter((path) => !ancestors.includes(path))),
+          new Set(
+            [...previous].filter(
+              (path) =>
+                !(
+                  path === "group:__conflicts__" && conflictSet.has(selected)
+                ) &&
+                !(
+                  path === "group:__other_changes__" &&
+                  !conflictSet.has(selected)
+                ) &&
+                !ancestors.includes(path) &&
+                !ancestors.some((ancestor) =>
+                  path.endsWith(`:folder:${ancestor}`),
+                ),
+            ),
+          ),
       );
     }
   }, [selected]);
@@ -151,8 +225,11 @@ export default function ChangedFileTree({
     }
     return callback;
   };
+  const collapseKey = (node: ChangedFileNode) =>
+    node.group || node.id.startsWith("__") ? node.id : node.path;
   const toggle = (node: ChangedFileNode) => {
-    const closing = !collapsed.has(node.path);
+    const key = collapseKey(node);
+    const closing = !collapsed.has(key);
     if (
       closing &&
       focusedId?.startsWith("file:") &&
@@ -167,8 +244,8 @@ export default function ChangedFileTree({
       focus(node.id);
     setCollapsed((previous) => {
       const next = new Set(previous);
-      if (next.has(node.path)) next.delete(node.path);
-      else next.add(node.path);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   };
@@ -207,12 +284,13 @@ export default function ChangedFileTree({
         break;
       case "ArrowRight":
         if (node.type === "folder") {
-          if (collapsed.has(node.path)) toggle(node);
+          if (collapsed.has(collapseKey(node))) toggle(node);
           else focus(visible[index + 1]?.node.id);
         }
         break;
       case "ArrowLeft":
-        if (node.type === "folder" && !collapsed.has(node.path)) toggle(node);
+        if (node.type === "folder" && !collapsed.has(collapseKey(node)))
+          toggle(node);
         else focus(current?.parentId);
         break;
       case "Enter":
@@ -226,7 +304,7 @@ export default function ChangedFileTree({
               entry.parentId === current?.parentId &&
               entry.node.type === "folder",
           )
-          .map((entry) => entry.node.path);
+          .map((entry) => collapseKey(entry.node));
         setCollapsed(
           (previous) =>
             new Set([...previous].filter((path) => !siblings.includes(path))),
@@ -273,15 +351,17 @@ export default function ChangedFileTree({
   ): React.ReactNode =>
     nodes.map((node, position) => {
       const isFolder = node.type === "folder",
-        expanded = !collapsed.has(node.path),
+        expanded = !collapsed.has(collapseKey(node)),
         isReviewed = reviewed.has(node.path),
         notes = commentCounts.get(node.path) ?? 0,
         groupId = `${headingId}-${encodeURIComponent(node.id)}`,
         unavailableKind =
-          node.file && node.file.kind !== "text" ? node.file.kind : null;
+          node.file && !["text", "conflict"].includes(node.file.kind)
+            ? node.file.kind
+            : null;
       const label = isFolder
-        ? `Folder ${node.path}, ${node.fileCount} changed ${node.fileCount === 1 ? "file" : "files"}, ${countsLabel(node)}`
-        : `${node.path}, ${statusNames[node.file?.status ?? ""] ?? node.file?.status ?? "Changed"}, ${countsLabel(node)}, ${isReviewed ? "reviewed" : "unreviewed"}${notes ? `, ${notes} ${notes === 1 ? "comment" : "comments"}` : ""}${node.file?.oldPath ? `, renamed from ${node.file.oldPath}` : ""}${unavailableKind ? `, ${unavailableKind}: source display unavailable` : ""}`;
+        ? `${node.group ? node.name : `Folder ${node.path}`}, ${node.fileCount} changed ${node.fileCount === 1 ? "file" : "files"}, ${countsLabel(node)}`
+        : `${node.path}, ${statusNames[node.file?.status ?? ""] ?? node.file?.status ?? "Changed"}, ${countsLabel(node)}, ${isReviewed ? "reviewed" : "unreviewed"}${notes ? `, ${notes} ${notes === 1 ? "comment" : "comments"}` : ""}${node.file?.oldPath ? `, renamed from ${node.file.oldPath}` : ""}${unavailableKind ? `, ${unavailableKind}: source display unavailable` : conflictSet.has(node.path) ? ", conflict: resolve and stage in the working tree" : ""}`;
       return (
         <div role="none" key={node.id}>
           <button
@@ -343,7 +423,15 @@ export default function ChangedFileTree({
                 {isReviewed && <span className="changed-tree-reviewed">✓</span>}
               </span>
             )}
-            <Counts node={node} />
+            {!isFolder && conflictSet.has(node.path) ? (
+              <span className="conflict-badge" aria-label="Conflict">
+                !
+              </span>
+            ) : isFolder && node.group ? (
+              <span className="group-count">{node.fileCount}</span>
+            ) : (
+              <Counts node={node} />
+            )}
           </button>
           {isFolder && expanded && (
             <div role="group" id={groupId}>
@@ -359,6 +447,13 @@ export default function ChangedFileTree({
         <h2 id={headingId}>Changed files</h2>
         <span>{files.length}</span>
       </div>
+      <input
+        className="changed-tree-search"
+        aria-label="Filter files"
+        placeholder="⌕ Filter files…"
+        value={query}
+        onChange={(event) => setQuery(event.target.value)}
+      />
       <div className="changed-tree-toolbar">
         <span>{reviewedCount} reviewed</span>
         <select

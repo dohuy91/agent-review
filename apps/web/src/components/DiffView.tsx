@@ -76,7 +76,9 @@ function Code({
       (side === "old" && line.type === "add") ||
       (side === "new" && line.type === "delete")
         ? { ...line, text: "", type: "context" as const }
-        : line,
+        // Git preserves CRLF in raw source/anchor text. Normalize only this
+        // display model so CodeMirror and excerpt offsets use identical bytes.
+        : { ...line, text: line.text.replace(/\r$/, "") },
     );
     const doc = paneLines.map((line) => line.text).join("\n");
     const offsets: number[] = [];

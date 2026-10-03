@@ -1,5 +1,5 @@
 import { opendir, realpath, lstat, open } from "node:fs/promises";
-import { join, relative, isAbsolute, dirname } from "node:path";
+import { join, relative, isAbsolute, dirname, resolve } from "node:path";
 import { constants } from "node:fs";
 import { createHash } from "node:crypto";
 import type { SkillMetadata, SkillProfile } from "../../shared/src/index.js";
@@ -69,6 +69,7 @@ export class SkillCatalog {
       let root: string;
       try {
         root = await realpath(input);
+        if (root !== resolve(input)) continue;
       } catch {
         continue;
       }
@@ -129,4 +130,56 @@ export class SkillCatalog {
       throw changed();
     }
   }
+}
+
+/** No ancestor/home scan: one selected project root and existing explicit global roots. */
+export function projectSkillCatalog(
+  startingFolder: string,
+  globalRoots: string[],
+) {
+  const roots = [
+    {
+      path: join(startingFolder, ".agents", "skills"),
+      source: "project" as const,
+    },
+    ...globalRoots
+      .slice(0, 15)
+      .map((path) => ({ path: resolve(path), source: "global" as const })),
+  ];
+  const catalog = new SkillCatalog(roots.map((root) => root.path));
+  return {
+    async metadata(): Promise<
+      import("../../shared/src/project-settings.js").ProjectSkillMetadata[]
+    > {
+      const scanned = await catalog.scan();
+      const result: import("../../shared/src/project-settings.js").ProjectSkillMetadata[] =
+        [];
+      for (const skill of scanned) {
+        const source = roots.find((root) => root.path === skill.root);
+        if (!source) continue;
+        const text = (await readSkill(skill.root, skill.path)).toString("utf8");
+        const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(
+          text,
+        )?.[1];
+        const field = (name: string) =>
+          frontmatter
+            ?.match(new RegExp(`^${name}:\\s*(.+)$`, "m"))?.[1]
+            ?.trim()
+            .replace(/^["']|["']$/g, "")
+            .slice(0, 300);
+        result.push({
+          locator: skill.locator,
+          digest: skill.digest,
+          name: field("name") || skill.name,
+          ...(field("description")
+            ? { description: field("description") }
+            : {}),
+          source: source.source,
+          sourceRoot: skill.root,
+        });
+      }
+      return result;
+    },
+    resolve: (profile: SkillProfile) => catalog.resolve(profile),
+  };
 }

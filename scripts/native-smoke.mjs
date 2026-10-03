@@ -198,6 +198,17 @@ try {
   const base = `/api/repositories/${id}`;
   const review = (mode) =>
     request(`${base}/review?base=demo-base&mode=${mode}`);
+  // Product synchronization settings persist independently of review navigation.
+  const syncSettings = await request("/api/sync-settings");
+  assert.equal(syncSettings.intervalMs, 300000);
+  assert.equal(typeof syncSettings.autoFetchEnabled, "boolean");
+  await request("/api/sync-settings", "PUT", { autoFetchEnabled: false });
+  const initialSync = await request(base + "/sync");
+  assert.equal(initialSync.available, true);
+  assert.equal(initialSync.merge.pending, false);
+  assert.equal(initialSync.actual.head, git("rev-parse", "HEAD"));
+  assert.deepEqual(initialSync.remotes, []);
+  assert.equal((await request(base + "/git-settings")).defaultRemote, null);
   const originalHead = git("rev-parse", "HEAD");
   const historic = await review("branch");
   const historicEntry = (await request(base + "/history")).reviews.find(
@@ -206,6 +217,14 @@ try {
   assert.ok(historicEntry);
   const full = await review("full");
   assert.ok(full.files.some((file) => file.path === "review.ts"));
+  const projectAgentSettings = await request(base + "/project-settings");
+  assert.equal(projectAgentSettings.settings.startingFolder, repository);
+  const savedAgentSettings = await request(base + "/project-settings", "PUT", {
+    reviewId: full.id,
+    expectedRevision: projectAgentSettings.revision,
+    settings: { startingFolder: repository, adapter: "claude", skill: null },
+  });
+  assert.equal(savedAgentSettings.revision, projectAgentSettings.revision + 1);
   const note = await request(
     base + "/comments",
     "POST",
@@ -317,6 +336,11 @@ try {
       ),
     );
   }
+  assert.equal((await request("/api/sync-settings")).autoFetchEnabled, false);
+  const restoredAgentSettings = await request(base + "/project-settings");
+  assert.equal(restoredAgentSettings.settings.adapter, "claude");
+  assert.equal(restoredAgentSettings.settings.startingFolder, repository);
+  assert.equal(restoredAgentSettings.revision, savedAgentSettings.revision);
   const refreshed = await review("full");
   const restoredNotes = await request(
     `${base}/comments?reviewId=${refreshed.id}`,
@@ -406,6 +430,94 @@ try {
     git("stash", "apply", "--index", switched.stash.oid);
     assert.ok(git("diff", "--cached", "--name-only").includes("deleted.txt"));
   }
+  // Verify refresh against real externally edited/staged merge conflicts through the CLI server.
+  const conflictRoot = join(owned, "conflict-repository");
+  await mkdir(conflictRoot);
+  const conflictGit = (...args) =>
+    execFileSync("git", ["-C", conflictRoot, ...args], {
+      encoding: "utf8",
+      env: fixtureEnv,
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+  conflictGit("init", "-q", "-b", "main");
+  conflictGit("config", "user.name", "Native Smoke");
+  conflictGit("config", "user.email", "smoke@example.invalid");
+  await writeFile(join(conflictRoot, "conflict.txt"), "base\n");
+  conflictGit("add", ".");
+  conflictGit("commit", "-qm", "base");
+  conflictGit("branch", "other");
+  await writeFile(join(conflictRoot, "conflict.txt"), "local\n");
+  conflictGit("commit", "-qam", "local");
+  conflictGit("checkout", "-q", "other");
+  await writeFile(join(conflictRoot, "conflict.txt"), "remote\n");
+  conflictGit("commit", "-qam", "remote");
+  conflictGit("checkout", "-q", "main");
+  assert.throws(() => conflictGit("merge", "--no-edit", "other"));
+  const conflictRepo = await request("/api/repositories", "POST", {
+    path: conflictRoot,
+  });
+  const conflictBase = `/api/repositories/${conflictRepo.id}`;
+  const conflicted = await request(conflictBase + "/sync");
+  assert.equal(conflicted.merge.pending, true);
+  assert.deepEqual(conflicted.merge.conflicts, ["conflict.txt"]);
+  assert.equal(conflicted.merge.canContinue, false);
+  const conflictReview = await request(
+    conflictBase + "/review?base=HEAD&mode=working",
+  );
+  assert.equal(
+    conflictReview.files.find((file) => file.path === "conflict.txt").kind,
+    "conflict",
+  );
+  const conflictDiff = await request(
+    `${conflictBase}/diff?reviewId=${conflictReview.id}&path=conflict.txt`,
+  );
+  assert.equal(conflictDiff.unsupportedReason, null);
+  assert.match(conflictDiff.newContent, /<<<<<<< HEAD/);
+  assert.equal(conflictDiff.oldContent, null);
+  await writeFile(join(conflictRoot, "conflict.txt"), "resolved by user\n");
+  const edited = await request(conflictBase + "/sync");
+  assert.deepEqual(edited.merge.conflicts, ["conflict.txt"]);
+  assert.equal(edited.merge.canContinue, false);
+  conflictGit("add", "conflict.txt");
+  const stagedResolution = await request(conflictBase + "/sync");
+  assert.equal(stagedResolution.merge.pending, true);
+  assert.deepEqual(stagedResolution.merge.conflicts, []);
+  assert.equal(stagedResolution.merge.canContinue, true);
+  const resolvedReview = await request(
+    conflictBase + "/review?base=HEAD&mode=full",
+  );
+  assert.ok(resolvedReview.files.every((file) => file.kind !== "conflict"));
+  const continuePlan = await request(conflictBase + "/merge-preview", "POST", {
+    action: "continue",
+  });
+  await request(conflictBase + "/merge", "POST", {
+    previewId: continuePlan.previewId,
+    confirmed: true,
+  });
+  assert.equal((await request(conflictBase + "/sync")).merge.pending, false);
+  assert.equal(conflictGit("show", "HEAD:conflict.txt"), "resolved by user");
+  conflictGit("branch", "abort-side");
+  await writeFile(join(conflictRoot, "conflict.txt"), "keep local\n");
+  conflictGit("commit", "-qam", "keep local");
+  const beforeAbort = conflictGit("rev-parse", "HEAD");
+  conflictGit("checkout", "-q", "abort-side");
+  await writeFile(join(conflictRoot, "conflict.txt"), "other edit\n");
+  conflictGit("commit", "-qam", "other edit");
+  conflictGit("checkout", "-q", "main");
+  assert.throws(() => conflictGit("merge", "--no-edit", "abort-side"));
+  const abortPlan = await request(conflictBase + "/merge-preview", "POST", {
+    action: "abort",
+  });
+  await request(conflictBase + "/merge", "POST", {
+    previewId: abortPlan.previewId,
+    confirmed: true,
+  });
+  assert.equal((await request(conflictBase + "/sync")).merge.pending, false);
+  assert.equal(conflictGit("rev-parse", "HEAD"), beforeAbort);
+  assert.equal(
+    await readFile(join(conflictRoot, "conflict.txt"), "utf8"),
+    "keep local\n",
+  );
   await stop();
   console.log(
     JSON.stringify({
@@ -431,6 +543,10 @@ try {
             explicitStashRecovery: "passed",
           }
         : {}),
+      synchronizationSettingsPersistence: "passed",
+      projectAgentSettingsPersistence: "passed",
+      conflictSourceAndExternalResolutionRefresh: "passed",
+      confirmedMergeContinueAndAbort: "passed",
       providerCalls: 0,
       liveFetchCalls: 0,
     }),

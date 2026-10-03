@@ -5,6 +5,7 @@ export type BranchChoice = { value: string; label: string; disabled?: boolean };
 /** Search is local state; only a listed option can become a Git reference. */
 export default function BranchCombobox({
   label,
+  accessibleLabel,
   value,
   options,
   onChange,
@@ -12,6 +13,7 @@ export default function BranchCombobox({
   disabled = false,
 }: {
   label: string;
+  accessibleLabel?: string;
   value: string;
   options: BranchChoice[];
   onChange: (value: string) => void;
@@ -52,6 +54,7 @@ export default function BranchCombobox({
       <div className="branch-picker-input">
         <input
           id={id}
+          aria-label={accessibleLabel}
           role="combobox"
           aria-autocomplete="list"
           aria-expanded={open}
@@ -62,7 +65,13 @@ export default function BranchCombobox({
               : undefined
           }
           title={value || placeholder}
-          value={open ? query : value}
+          value={
+            open
+              ? query
+              : (options
+                  .find((option) => option.value === value)
+                  ?.label.replace(/ \(checked out\)$/, "") ?? value)
+          }
           placeholder={placeholder}
           disabled={disabled}
           onFocus={() => {
@@ -128,7 +137,7 @@ export default function BranchCombobox({
           className="branch-options"
           id={`${id}-options`}
           role="listbox"
-          aria-label={`${label} options`}
+          aria-label={`${accessibleLabel || label} options`}
         >
           {filtered.map((option, index) => (
             <button

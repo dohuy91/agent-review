@@ -360,9 +360,82 @@ test.each([
     );
     const row = item(source.path);
     expect(row.getAttribute("aria-label")).toContain(
-      `${kind}: source display unavailable`,
+      kind === "conflict"
+        ? "conflict: resolve and stage in the working tree"
+        : `${kind}: source display unavailable`,
     );
-    expect(row.querySelector(".changed-tree-kind")?.textContent).toBe(kind);
-    expect(row.textContent).toContain("—");
+    expect(row.querySelector(".changed-tree-kind")?.textContent).toBe(
+      kind === "conflict" ? undefined : kind,
+    );
+    expect(row.textContent).toContain(kind === "conflict" ? "!" : "—");
   },
 );
+
+test("conflict groups preserve nested paths, independent folder collapse and file search", () => {
+  render(
+    <ChangedFileTree
+      files={[
+        { ...file("src/a.ts"), status: "U", kind: "conflict" },
+        file("src/b.ts", 4, 2),
+      ]}
+      selected="src/a.ts"
+      onSelect={vi.fn()}
+    />,
+  );
+  const conflictGroup = screen.getByRole("treeitem", {
+    name: /Conflicts, 1 changed/,
+  });
+  expect(conflictGroup.textContent).toContain("Conflicts");
+  expect(item("src/a.ts").querySelector(".conflict-badge")).toBeTruthy();
+  const folders = screen.getAllByRole("treeitem", { name: /Folder src,/ });
+  fireEvent.click(folders[0]);
+  expect(
+    screen.queryByRole("treeitem", { name: /src\/a.ts, Unmerged/ }),
+  ).toBeNull();
+  expect(
+    screen.getByRole("treeitem", { name: /src\/b.ts, Modified/ }),
+  ).toBeTruthy();
+  fireEvent.change(screen.getByLabelText("Filter files"), {
+    target: { value: "b.ts" },
+  });
+  expect(
+    screen.queryByRole("treeitem", { name: /Conflicts, 1 changed/ }),
+  ).toBeNull();
+  expect(item("src/b.ts").textContent).toContain("+4");
+});
+
+test("ordinary double-underscore paths keep exact line counts outside synthetic groups", () => {
+  render(
+    <ChangedFileTree
+      files={[file("__init__.py", 3, 2), file("__tests__/a.ts", 4, 1)]}
+      selected="__init__.py"
+      onSelect={vi.fn()}
+    />,
+  );
+  expect(item("__init__.py").textContent).toContain("+3");
+  expect(item("__init__.py").textContent).toContain("−2");
+  expect(item("__tests__").textContent).toContain("+4");
+  expect(item("__tests__").textContent).toContain("−1");
+});
+
+test("explicit selection expands its collapsed conflict group", () => {
+  const files = [
+    { ...file("src/a.ts"), status: "U", kind: "conflict" as const },
+    file("src/b.ts"),
+  ];
+  const view = render(
+    <ChangedFileTree files={files} selected="src/b.ts" onSelect={vi.fn()} />,
+  );
+  fireEvent.click(
+    screen.getByRole("treeitem", { name: /Conflicts, 1 changed/ }),
+  );
+  expect(
+    screen.queryByRole("treeitem", { name: /src\/a.ts, Unmerged/ }),
+  ).toBeNull();
+  view.rerender(
+    <ChangedFileTree files={files} selected="src/a.ts" onSelect={vi.fn()} />,
+  );
+  expect(
+    screen.getByRole("treeitem", { name: /src\/a.ts, Unmerged/ }),
+  ).toBeTruthy();
+});

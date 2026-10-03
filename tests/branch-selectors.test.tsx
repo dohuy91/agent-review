@@ -10,6 +10,15 @@ import {
   within,
 } from "@testing-library/react";
 import App from "../apps/web/src/App.js";
+import {
+  chooseTheme,
+  selectedTheme,
+  openProfiles,
+  chooseBase,
+  advancedBase,
+  openFileActions,
+  selectedProject,
+} from "./workspace-helpers.js";
 afterEach(() => {
   cleanup();
   localStorage.clear();
@@ -191,6 +200,13 @@ function fixture(
     else if (route.endsWith("/history")) data = { reviews: [], runs: [] };
     else if (route.endsWith("/git/status"))
       data = { writesEnabled: true, files: [], remotes: [] };
+    else if (route.endsWith("/project-settings"))
+      data = {
+        repositoryId: "repo",
+        projectId: "project",
+        revision: 0,
+        settings: { startingFolder: "/fixture", adapter: "codex", skill: null },
+      };
     else if (route.endsWith("/remotes")) data = { remotes: [] };
     return { ok: true, status: 200, json: async () => data };
   });
@@ -232,8 +248,8 @@ test("distinct local-target and remote-base selectors enumerate full refs while 
     refOptions("Remote base branch").map((o) => o.getAttribute("data-ref")),
   ).toContain("refs/remotes/upstream/release");
   expect(
-    (screen.getByLabelText("Registered worktree") as HTMLSelectElement).value,
-  ).toBe("repo");
+    screen.getByRole("tab", { name: "fixture" }).getAttribute("aria-selected"),
+  ).toBe("true");
   fireEvent.keyDown(remote, { key: "Escape" });
   chooseRef("Local target branch", "refs/heads/feature");
   await waitFor(() =>
@@ -242,7 +258,7 @@ test("distinct local-target and remote-base selectors enumerate full refs while 
     ),
   );
   await waitFor(() =>
-    expect((local as HTMLInputElement).value).toBe("refs/heads/feature"),
+    expect((local as HTMLInputElement).value).toBe("feature"),
   );
   expect(
     screen.queryByRole("status", { name: "Comparison target status" }),
@@ -267,11 +283,8 @@ test("advanced commit/local bases remain explicit and choosing checkout clears s
   await load();
   expect(
     (screen.getByLabelText("Local target branch") as HTMLInputElement).value,
-  ).toBe("refs/heads/feature");
-  fireEvent.click(screen.getByRole("button", { name: "Advanced base" }));
-  fireEvent.change(screen.getByLabelText("Base reference"), {
-    target: { value: "HEAD~2" },
-  });
+  ).toBe("feature");
+  chooseBase("HEAD~2");
   await waitFor(() =>
     expect(
       f.calls.some(
@@ -361,7 +374,7 @@ test("late comparison response cannot replace a newer remote base or its target-
   await new Promise((resolve) => setTimeout(resolve, 0));
   expect(
     (screen.getByLabelText("Remote base branch") as HTMLInputElement).value,
-  ).toBe("refs/remotes/origin/main");
+  ).toBe("origin/main");
   expect(
     (screen.getByLabelText("Comment body") as HTMLTextAreaElement).value,
   ).toBe("Feature-specific draft");
@@ -396,9 +409,9 @@ test("branch search filters locally and only an exact keyboard option changes th
     expect(f.calls.some((c) => c.url.endsWith("/branch-switch"))).toBe(true),
   );
   await waitFor(() =>
-    expect((local as HTMLInputElement).value).toBe("refs/heads/feature"),
+    expect((local as HTMLInputElement).value).toBe("feature"),
   );
-  expect((local as HTMLInputElement).value).toBe("refs/heads/feature");
+  expect((local as HTMLInputElement).value).toBe("feature");
   expect(local.getAttribute("title")).toBe("refs/heads/feature");
   expect(local.getAttribute("aria-expanded")).toBe("false");
 
@@ -408,7 +421,7 @@ test("branch search filters locally and only an exact keyboard option changes th
   const committed = f.calls.filter((c) => c.url.includes("/review?")).length;
   fireEvent.keyDown(remote, { key: "Enter" });
   fireEvent.keyDown(remote, { key: "Escape" });
-  expect((remote as HTMLInputElement).value).toBe("refs/remotes/origin/main");
+  expect((remote as HTMLInputElement).value).toBe("origin/main");
   expect(f.calls.filter((c) => c.url.includes("/review?")).length).toBe(
     committed,
   );
@@ -429,7 +442,7 @@ test("committing a local option previews and switches checkout while search alon
     ).toEqual({ previewId: "preview", strategy: "clean" }),
   );
   await waitFor(() =>
-    expect((local as HTMLInputElement).value).toBe("refs/heads/feature"),
+    expect((local as HTMLInputElement).value).toBe("feature"),
   );
   expect(
     f.calls.find((call) => call.url.endsWith("/branch-switch-preview"))?.body,
@@ -461,7 +474,7 @@ test("dirty branch cancel preserves the current draft and confirmed stash report
   ).toBe("keep before branch decision");
   expect(
     (screen.getByLabelText("Local target branch") as HTMLInputElement).value,
-  ).toBe("refs/heads/main");
+  ).toBe("main");
   chooseRef("Local target branch", "refs/heads/feature");
   fireEvent.click(
     await screen.findByRole("button", { name: "Stash & switch" }),
@@ -497,7 +510,7 @@ test("dismissed delayed branch preview cannot switch checkout", async () => {
   );
   expect(
     (screen.getByLabelText("Local target branch") as HTMLInputElement).value,
-  ).toBe("refs/heads/main");
+  ).toBe("main");
 });
 
 test("commit-and-switch uses selected staged paths and requires a new stash decision for remaining local work", async () => {
@@ -645,7 +658,7 @@ test("a successful checkout remains visible when its subsequent comparison canno
   await screen.findByText("No common ancestor");
   expect(
     (screen.getByLabelText("Local target branch") as HTMLInputElement).value,
-  ).toBe("refs/heads/feature");
+  ).toBe("feature");
   expect(screen.getByText("Switched to refs/heads/feature.")).toBeTruthy();
   expect(screen.getByText("The comparison could not be loaded.")).toBeTruthy();
   expect(screen.queryByText("No changes in this comparison.")).toBeNull();
@@ -672,7 +685,7 @@ test("a deleted saved comparison target can be cleared to the current checkout w
   await screen.findByRole("button", { name: "old line 1" });
   expect(
     (screen.getByLabelText("Local target branch") as HTMLInputElement).value,
-  ).toBe("refs/heads/main");
+  ).toBe("main");
   expect(
     f.calls.some((call) => call.url.endsWith("/branch-switch-preview")),
   ).toBe(false);
@@ -686,14 +699,14 @@ test("left file navigation and compact skill settings leave only current notes a
   await load();
   const left = document.getElementById("project-pane")!;
   const right = document.getElementById("details-pane")!;
-  expect(within(left).getByLabelText("Registered worktree")).toBeTruthy();
+  expect(screen.getByRole("tablist", { name: "Projects" })).toBeTruthy();
   expect(within(left).getByRole("treeitem", { name: /a.ts/ })).toBeTruthy();
   expect(within(right).queryByRole("treeitem", { name: /a.ts/ })).toBeNull();
   expect(within(right).queryByText("Review history")).toBeNull();
   expect(within(right).queryByText("Fix skill settings")).toBeNull();
   expect(screen.queryByLabelText("Installed skill")).toBeNull();
-  expect(within(right).getByText("skill://fixture")).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "Fix profiles" }));
+  expect(within(right).queryByText("skill://fixture")).toBeNull();
+  openProfiles();
   const dialog = screen.getByRole("dialog");
   expect(
     await within(dialog).findByLabelText("Installed fix skill"),

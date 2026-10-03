@@ -11,6 +11,15 @@ import {
 } from "@testing-library/react";
 import App from "../apps/web/src/App.js";
 import {
+  chooseTheme,
+  selectedTheme,
+  openProfiles,
+  chooseBase,
+  advancedBase,
+  openFileActions,
+  selectedProject,
+} from "./workspace-helpers.js";
+import {
   defaultShortcuts,
   loadPreferences,
 } from "../apps/web/src/preferences.js";
@@ -59,6 +68,13 @@ function fixture() {
     else if (route.includes("/reviewed")) value = { files: [] };
     else if (route.includes("/profiles")) value = { profiles: {}, revision: 0 };
     else if (route.endsWith("/history")) value = { reviews: [], runs: [] };
+    else if (route.endsWith("/project-settings"))
+      value = {
+        repositoryId: "repo",
+        projectId: "project",
+        revision: 0,
+        settings: { startingFolder: "/fixture", adapter: "codex", skill: null },
+      };
     else if (route.endsWith("/remotes")) value = { remotes: [] };
     return { ok: true, status: 200, json: async () => value };
   });
@@ -87,7 +103,7 @@ test("configured shortcuts persist, respect fields/modals and replace the defaul
   });
   fireEvent.click(screen.getByRole("button", { name: "Save shortcuts" }));
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-  fireEvent.keyDown(screen.getByLabelText("Base reference"), { key: "x" });
+  fireEvent.keyDown(screen.getByLabelText("Remote base branch"), { key: "x" });
   expect(document.querySelector(".file-title")?.textContent).toContain("a.ts");
   fireEvent.keyDown(document, { key: "j" });
   expect(document.querySelector(".file-title")?.textContent).toContain("a.ts");
@@ -136,9 +152,7 @@ test("invalid persisted mapping falls back safely and theme/split preferences su
     ),
   );
   fireEvent.click(screen.getByRole("button", { name: "Split" }));
-  fireEvent.change(screen.getByRole("combobox", { name: "Theme" }), {
-    target: { value: "dark" },
-  });
+  chooseTheme("dark");
   cleanup();
   render(<App />);
   await screen.findByTestId("diff");
@@ -200,11 +214,6 @@ function systemTheme(initialDark: boolean, legacy = false) {
     },
   };
 }
-function chooseTheme(theme: "system" | "light" | "dark") {
-  fireEvent.change(screen.getByRole("combobox", { name: "Theme" }), {
-    target: { value: theme },
-  });
-}
 
 test("new preferences follow the system theme and live OS changes", async () => {
   const system = systemTheme(true);
@@ -212,10 +221,7 @@ test("new preferences follow the system theme and live OS changes", async () => 
   render(<App />);
   await screen.findByTestId("diff");
   expect(document.documentElement.dataset.theme).toBe("dark");
-  expect(
-    (screen.getByRole("combobox", { name: "Theme" }) as HTMLSelectElement)
-      .value,
-  ).toBe("system");
+  expect(selectedTheme()).toBe("system");
   system.change(false);
   expect(document.documentElement.dataset.theme).toBe("light");
   system.change(true);
@@ -234,10 +240,7 @@ test("saving other preferences and reloading preserves System rather than the re
   render(<App />);
   await screen.findByTestId("diff");
   expect(document.documentElement.dataset.theme).toBe("light");
-  expect(
-    (screen.getByRole("combobox", { name: "Theme" }) as HTMLSelectElement)
-      .value,
-  ).toBe("system");
+  expect(selectedTheme()).toBe("system");
   expect(screen.getByTestId("diff").classList.contains("split")).toBe(true);
 });
 
@@ -257,10 +260,7 @@ test.each(["light", "dark"] as const)(
     render(<App />);
     await screen.findByTestId("diff");
     expect(document.documentElement.dataset.theme).toBe(theme);
-    expect(
-      (screen.getByRole("combobox", { name: "Theme" }) as HTMLSelectElement)
-        .value,
-    ).toBe(theme);
+    expect(selectedTheme()).toBe(theme);
     chooseTheme("system");
     expect(document.documentElement.dataset.theme).toBe(
       theme === "light" ? "dark" : "light",
@@ -290,10 +290,7 @@ test.each([false, true])(
     expect(document.documentElement.dataset.theme).toBe(
       dark ? "dark" : "light",
     );
-    expect(
-      (screen.getByRole("combobox", { name: "Theme" }) as HTMLSelectElement)
-        .value,
-    ).toBe(dark ? "dark" : "light");
+    expect(selectedTheme()).toBe(dark ? "dark" : "light");
     expect(loadPreferences()).toMatchObject({
       theme: dark ? "dark" : "light",
       shortcuts: { nextFile: "x" },
@@ -309,10 +306,7 @@ test("System falls back to light when matchMedia is unavailable and explicit dar
   render(<App />);
   await screen.findByTestId("diff");
   expect(document.documentElement.dataset.theme).toBe("light");
-  expect(
-    (screen.getByRole("combobox", { name: "Theme" }) as HTMLSelectElement)
-      .value,
-  ).toBe("system");
+  expect(selectedTheme()).toBe("system");
   chooseTheme("dark");
   expect(document.documentElement.dataset.theme).toBe("dark");
 });

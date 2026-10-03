@@ -2,6 +2,7 @@
 import React from "react";
 import { test, expect, vi, afterEach } from "vitest";
 import {
+  act,
   render,
   screen,
   fireEvent,
@@ -405,4 +406,598 @@ test("unverified OpenCode version shows actionable unavailable reason and blocks
     (screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement)
       .disabled,
   ).toBe(true);
+});
+
+test("compact toolbar opens comment selection and confirms exact project cwd and digest", async () => {
+  const calls: any[] = [];
+  const skill = {
+    locator: "/repo/src/.agents/skills/fix/SKILL.md",
+    digest: "c".repeat(64),
+  };
+  const execution = {
+    startingFolder: "/repo/src",
+    folderStamp: "stamp",
+    settingsRevision: 3,
+    adapter: "claude",
+    skill,
+  };
+  const target = {
+    branch: "feature",
+    head: "abc",
+    worktreeRoot: "/repo",
+    projectId: "project",
+  };
+  const profile = { profiles: {}, effective: null, source: null, revision: 0 };
+  vi.stubGlobal("fetch", async (url: string, opts: any = {}) => {
+    if (opts.body) calls.push(JSON.parse(opts.body));
+    let data: any = {};
+    if (url === "/api/agents")
+      data = {
+        agents: [
+          {
+            id: "claude",
+            available: true,
+            provider: { identity: null, label: "Local Claude provider" },
+          },
+        ],
+        writesEnabled: true,
+      };
+    else if (url.includes("/project-settings"))
+      data = {
+        revision: 3,
+        settings: { startingFolder: "/repo/src", adapter: "claude", skill },
+      };
+    else if (url.includes("/skills?"))
+      data = {
+        skills: [
+          {
+            ...skill,
+            name: "Fix",
+            source: "project",
+            sourceRoot: "/repo/src/.agents/skills",
+          },
+        ],
+      };
+    else if (url.includes("/agent-context?"))
+      data = { target, profile, execution };
+    else if (opts.method === "POST") data = { id: "run", status: "completed" };
+    return { ok: true, json: async () => data };
+  });
+  render(
+    <AgentPanel
+      repositoryId="repo"
+      reviewId="review"
+      comments={[
+        {
+          id: "note",
+          body: "Fix the issue",
+          status: "open",
+          attachment: "current",
+        } as any,
+      ]}
+      profile={profile as any}
+      {...({ compact: true, useProjectSettings: true } as any)}
+    />,
+  );
+  const trigger = screen.getByRole("button", { name: "Fix with Agent" });
+  expect(screen.queryByRole("checkbox")).toBeNull();
+  fireEvent.click(trigger);
+  fireEvent.click(await screen.findByRole("checkbox"));
+  await waitFor(() =>
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "Send to agent",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(false),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Send to agent" }));
+  const confirmation = await screen.findByRole("dialog", {
+    name: "Confirm agent transmission",
+  });
+  expect(confirmation.textContent).toContain("/repo/src");
+  expect(confirmation.textContent).toContain(skill.digest);
+  expect(confirmation.textContent).toContain("project");
+  expect(confirmation.textContent).toContain("Local Claude provider");
+  expect(screen.queryByRole("dialog", { name: "Fix with Agent" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Confirm Send" }));
+  await waitFor(() => expect(calls).toHaveLength(1));
+  expect(calls[0]).toEqual({
+    adapter: "claude",
+    reviewId: "review",
+    commentIds: ["note"],
+    expected: { target, profile, execution },
+  });
+  expect(document.activeElement).toBe(trigger);
+});
+
+test("closing compact selection invalidates pending preparation and does not reopen confirmation", async () => {
+  let resolve: any;
+  const pending = new Promise((r) => (resolve = r));
+  const profile: any = {
+    effective: { locator: "exact", digest: "d" },
+    revision: 1,
+  };
+  vi.stubGlobal("fetch", async (url: string) =>
+    url.includes("/export?")
+      ? pending
+      : {
+          ok: true,
+          json: async () =>
+            url === "/api/agents"
+              ? {
+                  agents: [{ id: "codex", available: true }],
+                  writesEnabled: true,
+                }
+              : { skills: [{ locator: "exact", digest: "d" }] },
+        },
+  );
+  render(
+    <AgentPanel
+      repositoryId="repo"
+      reviewId="review"
+      comments={[
+        {
+          id: "note",
+          body: "Fix",
+          status: "open",
+          attachment: "current",
+        } as any,
+      ]}
+      profile={profile}
+      compact
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Fix with Agent" }));
+  fireEvent.click(await screen.findByRole("checkbox"));
+  await waitFor(() =>
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "Send to agent",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(false),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Send to agent" }));
+  fireEvent.click(screen.getByRole("button", { name: "×" }));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  resolve({
+    ok: true,
+    json: async () => ({
+      target: { branch: "main", head: "abc", worktreeRoot: "/repo" },
+      profile,
+    }),
+  });
+  await new Promise((r) => setTimeout(r, 30));
+  expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+test("compact selection keeps workspace dialog state active when profiles refresh", async () => {
+  const states: boolean[] = [];
+  vi.stubGlobal("fetch", async () => ({
+    ok: true,
+    json: async () => ({ skills: [], agents: [], writesEnabled: false }),
+  }));
+  const props = {
+    repositoryId: "repo",
+    reviewId: "review",
+    comments: [],
+    compact: true,
+    onDialogChange: (open: boolean) => states.push(open),
+  };
+  const view = render(
+    <AgentPanel
+      {...props}
+      profile={{ revision: 1, effective: null, profiles: {}, source: null }}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Fix with Agent" }));
+  expect(states.at(-1)).toBe(true);
+  view.rerender(
+    <AgentPanel
+      {...props}
+      profile={{ revision: 2, effective: null, profiles: {}, source: null }}
+    />,
+  );
+  expect(screen.getByRole("dialog", { name: "Fix with Agent" })).toBeTruthy();
+  expect(states.at(-1)).toBe(true);
+});
+
+for (const status of [409, 429, 503]) {
+  test(`compact failed launch ${status} stays visible outside the dismissed dialog`, async () => {
+    let rejectLaunch!: (response: any) => void;
+    const pending = new Promise((resolve) => {
+      rejectLaunch = resolve;
+    });
+    const profile: any = {
+      effective: { locator: "exact", digest: "d" },
+      revision: 1,
+    };
+    vi.stubGlobal("fetch", async (url: string, options: any = {}) => {
+      if (options.method === "POST" && url.endsWith("/agents")) return pending;
+      return {
+        ok: true,
+        json: async () =>
+          url === "/api/agents"
+            ? {
+                agents: [{ id: "codex", available: true }],
+                writesEnabled: true,
+              }
+            : url === "/api/skills"
+              ? { skills: [{ locator: "exact", digest: "d" }] }
+              : {
+                  target: {
+                    branch: "main",
+                    head: "abc",
+                    worktreeRoot: "/repo",
+                  },
+                  profile,
+                },
+      };
+    });
+    render(
+      <AgentPanel
+        repositoryId="repo"
+        reviewId="review"
+        comments={[
+          {
+            id: "note",
+            body: "Fix",
+            status: "open",
+            attachment: "current",
+          } as any,
+        ]}
+        profile={profile}
+        compact
+      />,
+    );
+    const trigger = screen.getByRole("button", { name: "Fix with Agent" });
+    fireEvent.click(trigger);
+    fireEvent.click(await screen.findByRole("checkbox"));
+    await waitFor(() =>
+      expect(
+        (
+          screen.getByRole("button", {
+            name: "Send to agent",
+          }) as HTMLButtonElement
+        ).disabled,
+      ).toBe(false),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Send to agent" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Confirm Send" }),
+    );
+    if (status === 503) {
+      fireEvent.click(trigger);
+      fireEvent.click(screen.getByRole("button", { name: "×" }));
+    }
+    rejectLaunch({
+      ok: false,
+      status,
+      json: async () => ({
+        error:
+          status === 429 ? "Agent capacity reached" : "Provider unavailable",
+      }),
+    });
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain(
+      status === 409
+        ? "Review changed"
+        : status === 429
+          ? "Agent capacity reached"
+          : "Provider unavailable",
+    );
+    expect(screen.queryByRole("dialog")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Review agent setup" }));
+    expect(screen.getByRole("dialog", { name: "Fix with Agent" })).toBeTruthy();
+  });
+}
+
+async function compactRuntimeFixture(
+  immediateFailure = false,
+  delayedLaunch = false,
+) {
+  const streams: any[] = [],
+    requests: any[] = [],
+    stops: string[] = [];
+  const pendingLaunches: (() => void)[] = [];
+  const profile: any = {
+    effective: { locator: "exact", digest: "d" },
+    revision: 1,
+  };
+  vi.stubGlobal(
+    "EventSource",
+    class {
+      onmessage: any;
+      onerror: any;
+      constructor(public url: string) {
+        streams.push(this);
+      }
+      close() {}
+    },
+  );
+  vi.stubGlobal("fetch", async (url: string, options: any = {}) => {
+    let result: any;
+    if (url === "/api/agents")
+      result = {
+        agents: [{ id: "codex", available: true }],
+        writesEnabled: true,
+      };
+    else if (url === "/api/skills")
+      result = { skills: [{ locator: "exact", digest: "d" }] };
+    else if (options.method === "POST" && url.endsWith("/stop")) {
+      stops.push(url);
+      result = { id: "run-1", status: "stopped", error: null };
+    } else if (options.method === "POST" && url.endsWith("/agents")) {
+      requests.push(JSON.parse(options.body));
+      result = {
+        id: `run-${requests.length}`,
+        status: immediateFailure ? "failed" : "running",
+        error: immediateFailure ? "Unable to start codex" : null,
+      };
+    } else
+      result = {
+        target: { branch: "main", head: "abc", worktreeRoot: "/repo" },
+        profile,
+      };
+    if (delayedLaunch && options.method === "POST" && url.endsWith("/agents"))
+      return new Promise((resolve) =>
+        pendingLaunches.push(() =>
+          resolve({ ok: true, status: 201, json: async () => result }),
+        ),
+      );
+    return { ok: true, status: 201, json: async () => result };
+  });
+  const props = {
+    repositoryId: "repo",
+    reviewId: "review",
+    compact: true,
+    comments: [
+      { id: "note", body: "Fix", status: "open", attachment: "current" } as any,
+    ],
+    profile,
+  };
+  const view = render(<AgentPanel {...props} />);
+  async function launch() {
+    fireEvent.click(screen.getByRole("button", { name: "Fix with Agent" }));
+    const checkbox = (await screen.findByRole("checkbox")) as HTMLInputElement;
+    if (!checkbox.checked) fireEvent.click(checkbox);
+    await waitFor(() =>
+      expect(
+        (
+          screen.getByRole("button", {
+            name: "Send to agent",
+          }) as HTMLButtonElement
+        ).disabled,
+      ).toBe(false),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Send to agent" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Confirm Send" }),
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  }
+  return {
+    streams,
+    requests,
+    stops,
+    props,
+    view,
+    launch,
+    releaseLaunch: () => pendingLaunches.shift()!(),
+  };
+}
+for (const [status, error] of [
+  [
+    "needs-attention",
+    "Permission denied; manual permissions require attention",
+  ],
+  ["failed", "Structured output event limit exceeded"],
+] as const) {
+  test(`compact accepted run SSE ${status} stays visible and recovery preserves output without restarting`, async () => {
+    const f = await compactRuntimeFixture();
+    await f.launch();
+    await waitFor(() => expect(f.streams).toHaveLength(1));
+    await act(async () => {
+      f.streams[0].onmessage({
+        data: JSON.stringify({ type: "output", text: "Owned agent output" }),
+      });
+      f.streams[0].onmessage({
+        data: JSON.stringify({
+          type: "status",
+          run: { id: "run-1", status, error },
+        }),
+      });
+    });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect((await screen.findByRole("alert")).textContent).toContain(error);
+    expect(f.requests).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Review agent run" }));
+    expect(screen.getByRole("dialog", { name: "Fix with Agent" })).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toContain(status);
+    expect(screen.getByLabelText("Agent output").textContent).toBe(
+      "Owned agent output",
+    );
+    expect(screen.queryByRole("button", { name: "Stop agent" })).toBeNull();
+    expect(f.requests).toHaveLength(1);
+  });
+}
+test("compact 201 failed run is visible after confirmation closes", async () => {
+  const f = await compactRuntimeFixture(true);
+  await f.launch();
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect((await screen.findByRole("alert")).textContent).toContain(
+    "Unable to start codex",
+  );
+  expect(f.requests).toHaveLength(1);
+  expect(f.streams).toHaveLength(0);
+});
+test("compact terminal run dismissal survives review refresh and does not suppress a different run", async () => {
+  const f = await compactRuntimeFixture();
+  await f.launch();
+  await waitFor(() => expect(f.streams).toHaveLength(1));
+  await act(async () =>
+    f.streams[0].onmessage({
+      data: JSON.stringify({
+        type: "status",
+        run: { id: "run-1", status: "failed", error: "First failure" },
+      }),
+    }),
+  );
+  await screen.findByRole("alert");
+  fireEvent.click(
+    screen.getByRole("button", { name: "Dismiss agent run alert" }),
+  );
+  expect(screen.queryByRole("alert")).toBeNull();
+  f.view.rerender(<AgentPanel {...f.props} reviewId="refreshed" />);
+  expect(screen.queryByRole("alert")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Fix with Agent" }));
+  expect(screen.getByRole("status").textContent).toContain("failed");
+  fireEvent.click(screen.getByRole("button", { name: "×" }));
+  expect(screen.queryByRole("alert")).toBeNull();
+  await f.launch();
+  await waitFor(() => expect(f.streams).toHaveLength(2));
+  await act(async () =>
+    f.streams[1].onmessage({
+      data: JSON.stringify({
+        type: "status",
+        run: {
+          id: "run-2",
+          status: "needs-attention",
+          error: "New permission denial",
+        },
+      }),
+    }),
+  );
+  expect((await screen.findByRole("alert")).textContent).toContain(
+    "New permission denial",
+  );
+  expect(f.requests).toHaveLength(2);
+});
+
+test("compact active run survives A to B to A project navigation and stale A events cannot replace B", async () => {
+  const f = await compactRuntimeFixture();
+  await f.launch();
+  await waitFor(() => expect(f.streams).toHaveLength(1));
+  await act(async () =>
+    f.streams[0].onmessage({
+      data: JSON.stringify({ type: "output", text: "A output" }),
+    }),
+  );
+  f.view.rerender(
+    <AgentPanel
+      {...f.props}
+      repositoryId="project-b"
+      reviewId="review-b"
+      comments={[]}
+    />,
+  );
+  await act(async () => {
+    f.streams[0].onmessage({
+      data: JSON.stringify({
+        type: "status",
+        run: { id: "run-1", status: "failed", error: "Stale A event" },
+      }),
+    });
+    f.streams[0].onmessage({
+      data: JSON.stringify({ type: "output", text: "Stale A output" }),
+    });
+  });
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(
+    screen.getByRole("button", { name: "Fix with Agent" }).textContent,
+  ).not.toContain("Running");
+  expect(
+    f.streams.filter(
+      (stream) =>
+        stream.url.includes("project-b") && stream.url.includes("run-1"),
+    ),
+  ).toHaveLength(0);
+  fireEvent.click(screen.getByRole("button", { name: "Fix with Agent" }));
+  expect(screen.queryByRole("button", { name: "Stop agent" })).toBeNull();
+  expect(screen.queryByLabelText("Agent output")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "×" }));
+  f.view.rerender(<AgentPanel {...f.props} reviewId="refreshed-a" />);
+  await waitFor(() => expect(f.streams).toHaveLength(2));
+  expect(f.streams[1].url).toContain("/repositories/repo/agents/run-1/events");
+  await act(async () =>
+    f.streams[1].onmessage({
+      data: JSON.stringify({ type: "output", text: "Replayed A output" }),
+    }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Fix with Agent" }));
+  expect(screen.getByLabelText("Agent output").textContent).toBe(
+    "Replayed A output",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Stop agent" }));
+  await waitFor(() =>
+    expect(f.stops).toEqual(["/api/repositories/repo/agents/run-1/stop"]),
+  );
+  expect(f.requests).toHaveLength(1);
+});
+
+for (const returnBeforeResponse of [false, true]) {
+  test(`compact delayed authorized run retains A Stop after navigation, returnBeforeResponse=${returnBeforeResponse}`, async () => {
+    const f = await compactRuntimeFixture(false, true);
+    await f.launch();
+    expect(f.streams).toHaveLength(0);
+    f.view.rerender(
+      <AgentPanel
+        {...f.props}
+        repositoryId="project-b"
+        reviewId="review-b"
+        comments={[]}
+      />,
+    );
+    if (returnBeforeResponse)
+      f.view.rerender(<AgentPanel {...f.props} reviewId="returned-a" />);
+    await act(async () => f.releaseLaunch());
+    if (!returnBeforeResponse) {
+      expect(
+        screen.getByRole("button", { name: "Fix with Agent" }).textContent,
+      ).not.toContain("Running");
+      expect(f.streams).toHaveLength(0);
+      f.view.rerender(<AgentPanel {...f.props} reviewId="returned-a" />);
+    }
+    await waitFor(() => expect(f.streams).toHaveLength(1));
+    expect(f.streams[0].url).toContain(
+      "/repositories/repo/agents/run-1/events",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Fix with Agent" }));
+    fireEvent.click(screen.getByRole("button", { name: "Stop agent" }));
+    await waitFor(() =>
+      expect(f.stops).toEqual(["/api/repositories/repo/agents/run-1/stop"]),
+    );
+    expect(f.requests).toHaveLength(1);
+  });
+}
+
+test("an active project's Stop survives more than sixteen other project results", async () => {
+  const f = await compactRuntimeFixture();
+  await f.launch();
+  await waitFor(() => expect(f.streams).toHaveLength(1));
+  for (let index = 1; index <= 16; index++) {
+    f.view.rerender(
+      <AgentPanel
+        {...f.props}
+        repositoryId={`other-${index}`}
+        reviewId={`review-${index}`}
+      />,
+    );
+    await f.launch();
+    await waitFor(() => expect(f.streams).toHaveLength(index + 1));
+    await act(async () =>
+      f.streams[index].onmessage({
+        data: JSON.stringify({
+          type: "status",
+          run: { id: `run-${index + 1}`, status: "completed", error: null },
+        }),
+      }),
+    );
+  }
+  f.view.rerender(<AgentPanel {...f.props} reviewId="returned-a" />);
+  fireEvent.click(screen.getByRole("button", { name: "Fix with Agent" }));
+  expect(screen.getByRole("button", { name: "Stop agent" })).toBeTruthy();
 });

@@ -464,3 +464,21 @@ test("changing the comparison invalidates an open destination plan and restores 
       .value,
   ).toBe(review.targetRef ?? review.branch);
 });
+
+test("compact Push defaults to saved remote and separate arrow previews comparison destination", async () => {
+  const selectedReview = {...review, baseRef: "refs/remotes/upstream/main"};
+  const {props, rerender, calls, fetch} = setup(plan({remote: "upstream"}), selectedReview);
+  rerender(<PushActions {...props} compact defaultRemote="upstream"/>);
+  fireEvent.click(screen.getByRole("button", {name: "Push"}));
+  await screen.findByRole("dialog", {name: "Confirm push"});
+  expect(calls[0].body).toMatchObject({remote: "upstream", destinationRef: review.branch});
+  fireEvent.click(screen.getByRole("button", {name: "Cancel"}));
+  fetch.mockImplementationOnce(async (url: string, init: RequestInit) => {
+    const body = JSON.parse(String(init.body)); calls.push({url, body});
+    return reply(plan({remote: "upstream", destinationRef: "refs/heads/main", comparisonRef: "refs/remotes/upstream/main"}));
+  });
+  fireEvent.click(screen.getByRole("button", {name: "Push options"}));
+  fireEvent.click(screen.getByRole("menuitem", {name: /Push to comparison branch/}));
+  await screen.findByRole("dialog", {name: "Confirm push"});
+  expect(calls[1].body).toMatchObject({remote: "upstream", destinationRef: "refs/heads/main", comparisonRef: "refs/remotes/upstream/main"});
+});

@@ -72,6 +72,8 @@ export default forwardRef<
     repository: Repository | undefined;
     review: ReviewObservation | null;
     enabled: boolean;
+    compact?: boolean;
+    defaultRemote?: string | null;
     remotes: string[];
     comparisonDestinations?: ComparisonPushDestination[];
     onRefresh: () => void;
@@ -82,6 +84,8 @@ export default forwardRef<
     repository,
     review,
     enabled,
+    compact = false,
+    defaultRemote,
     remotes,
     comparisonDestinations = [],
     onRefresh,
@@ -98,7 +102,9 @@ export default forwardRef<
   const comparisonKey = comparison
     ? `${comparison.remote}:${comparison.destinationRef}`
     : "";
-  const [remote, setRemote] = useState(comparison?.remote ?? remotes[0] ?? ""),
+  const preferredRemote = compact ? (defaultRemote && remotes.includes(defaultRemote) ? defaultRemote : "") : comparison?.remote ?? remotes[0] ?? "";
+  const [menuOpen, setMenuOpen] = useState(false), [inspectNext, setInspectNext] = useState(false);
+  const [remote, setRemote] = useState(preferredRemote),
     [destinationRef, setDestinationRef] = useState(localRef),
     [toComparison, setToComparison] = useState(false),
     [preview, setPreview] = useState<PushPreview | null>(null),
@@ -126,8 +132,8 @@ export default forwardRef<
   useEffect(() => {
     setToComparison(false);
     setDestinationRef(localRef);
-    setRemote(comparison?.remote ?? remotes[0] ?? "");
-  }, [repository?.id, localRef, review?.baseRef, comparisonKey]);
+    setRemote(preferredRemote);
+  }, [repository?.id, localRef, review?.baseRef, comparisonKey, preferredRemote]);
   useEffect(() => {
     pending.current = null;
     pushing.current = false;
@@ -238,6 +244,26 @@ export default forwardRef<
       }
     }
   }
+  useEffect(() => {
+    if (!inspectNext) return;
+    setInspectNext(false);
+    void inspect();
+  }, [inspectNext, context]);
+  function inspectDefault() {
+    setMenuOpen(false);
+    setToComparison(false);
+    setRemote(preferredRemote);
+    setDestinationRef(localRef);
+    setInspectNext(true);
+  }
+  function inspectComparison() {
+    if (!comparison) return;
+    setMenuOpen(false);
+    setToComparison(true);
+    setRemote(comparison.remote);
+    setDestinationRef(comparison.destinationRef);
+    setInspectNext(true);
+  }
   async function confirm() {
     if (
       !preview ||
@@ -302,7 +328,9 @@ export default forwardRef<
     }
   }
   return (
-    <section className="push-actions" aria-label="Manual push">
+    <section className={compact ? "push-actions push-compact" : "push-actions"} aria-label="Manual push">
+      {compact ? <div className="split-push"><button title={preferredRemote ? `Push ${localRef} to ${preferredRemote}` : "Choose a default remote in Settings"} disabled={!allowed || busy || !preferredRemote} onClick={inspectDefault}>Push</button><button aria-label="Push options" aria-haspopup="menu" aria-expanded={menuOpen} disabled={!allowed || busy} onClick={() => setMenuOpen(!menuOpen)}>⌄</button>{menuOpen && <div className="push-menu" role="menu"><button role="menuitem" disabled={!comparison} onClick={inspectComparison}>Push to comparison branch{comparison ? ` · ${comparison.remote}/${comparison.destinationRef.replace(/^refs\/heads\//, "")}` : " (unavailable)"}</button></div>}</div> : <>
+
       <strong>Push</strong>
       <small>
         Preview contacts the remote using your existing HTTPS/SSH
@@ -371,6 +399,7 @@ export default forwardRef<
       >
         Preview push
       </button>
+      </>}
       {status && <p role="status">{status}</p>}
       {error && <p role="alert">{error}</p>}
       {preview &&

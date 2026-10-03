@@ -10,6 +10,16 @@ import {
   within,
 } from "@testing-library/react";
 import App from "../apps/web/src/App.js";
+import {
+  chooseTheme,
+  selectedTheme,
+  openProfiles,
+  chooseBase,
+  advancedBase,
+  openFileActions,
+  selectedProject,
+  openSettings,
+} from "./workspace-helpers.js";
 import type { ReviewMode } from "../packages/shared/src/index.js";
 afterEach(() => {
   cleanup();
@@ -119,6 +129,13 @@ function fixture(
         effective: null,
         source: null,
       });
+    if (route.endsWith("/project-settings"))
+      return response({
+        repositoryId: route.includes("/other/") ? "other" : "repo",
+        projectId: "project",
+        revision: 0,
+        settings: { startingFolder: "/fixture", adapter: "codex", skill: null },
+      });
     if (route.endsWith("/capabilities"))
       return response({
         writesEnabled: options.writes !== false,
@@ -162,6 +179,38 @@ function fixture(
       return response({ ok: true, changed: true });
     if (route.endsWith("/commit"))
       return response({ ok: true, changed: true, commit: "b".repeat(40) });
+    if (route.endsWith("/sync") || route.endsWith("/fetch-all")) {
+      const value = {
+        repositoryId: route.includes("/other/") ? "other" : repo.id,
+        available: true,
+        writesEnabled: options.writes !== false,
+        fetching: false,
+        autoFetchEnabled: true,
+        actual: { branch: repo.branch, head: repo.head },
+        merge: {
+          pending: false,
+          mergeHeads: [],
+          conflicts: [],
+          canContinue: false,
+          reason: null,
+        },
+        remotes: [
+          {
+            name: "origin",
+            eligible: options.writes !== false,
+            reason: null,
+            lastAttemptAt: null,
+            lastSuccessAt: null,
+            lastError: null,
+            nextAttemptAt: null,
+          },
+        ],
+        error: null,
+      };
+      return response(
+        route.endsWith("/sync") ? value : { ok: true, sync: value },
+      );
+    }
     if (route.endsWith("/fetch"))
       return response({ ok: true, remote: body.remote });
     if (route.endsWith("/history")) return response({ reviews: [], runs: [] });
@@ -172,7 +221,8 @@ function fixture(
 async function load() {
   render(<App />);
   await screen.findByRole("button", { name: "old line 1" });
-  await screen.findByText("https://example.test/repo.git");
+  openFileActions();
+  await screen.findByRole("region", { name: "Git actions" });
 }
 test("whole-file and working hunk actions use the exact observation/path then preserve draft text and invalidate its range", async () => {
   const calls = fixture();
@@ -269,18 +319,13 @@ test("staged commit includes only explicitly checked paths and the authored mess
   expect(screen.queryByRole("button", { name: "Stage hunk 1" })).toBeNull();
   expect(screen.getByRole("button", { name: "Unstage hunk 1" })).toBeTruthy();
 });
-test("Fetch is explicit and scoped to the current review and HEAD", async () => {
+test("Fetch explicitly refreshes all eligible configured remotes for the current project", async () => {
   const calls = fixture();
   await load();
-  expect(calls.filter((c) => c.url.endsWith("/fetch"))).toHaveLength(0);
-  expect(screen.getByText("https")).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "Fetch origin" }));
+  expect(calls.filter((c) => c.url.endsWith("/fetch-all"))).toHaveLength(0);
+  fireEvent.click(screen.getByRole("button", { name: "Fetch" }));
   await waitFor(() =>
-    expect(calls.find((c) => c.url.endsWith("/fetch"))?.body).toEqual({
-      reviewId: "review-1",
-      remote: "origin",
-      expectedHead: repo.head,
-    }),
+    expect(calls.find((c) => c.url.endsWith("/fetch-all"))?.body).toEqual({}),
   );
 });
 test.each([{ writes: false }, { historical: true }])(
@@ -288,12 +333,7 @@ test.each([{ writes: false }, { historical: true }])(
   async (options) => {
     const calls = fixture(options);
     await load();
-    for (const name of [
-      "Stage file",
-      "Unstage file",
-      "Discard file",
-      "Fetch origin",
-    ])
+    for (const name of ["Stage file", "Unstage file", "Discard file"])
       expect(
         screen.getByRole("button", { name }).hasAttribute("disabled"),
       ).toBe(true);
@@ -497,6 +537,7 @@ test("stale capabilities and remote metadata cannot reenable writes or replace n
   fireEvent.change(screen.getByLabelText("Review mode"), {
     target: { value: "staged" },
   });
+  openFileActions();
   await screen.findByText("Current writes disabled");
   oldCapabilities.resolve({ writesEnabled: true, fetchEnabled: true });
   oldRemotes.resolve({
@@ -513,8 +554,11 @@ test("stale capabilities and remote metadata cannot reenable writes or replace n
   expect(
     screen.getByRole("button", { name: "Stage file" }).hasAttribute("disabled"),
   ).toBe(true);
-  expect(screen.getByText("ssh://current.example/repo")).toBeTruthy();
-  expect(screen.queryByText("https://old.example/repo")).toBeNull();
+  const settings = openSettings("Git");
+  expect(
+    within(settings).getByRole("option", { name: "current" }),
+  ).toBeTruthy();
+  expect(within(settings).queryByRole("option", { name: "old" })).toBeNull();
 });
 test("700px drawer behavior retains the current project and visible unavailable roots across themes", async () => {
   fixture();
@@ -538,7 +582,7 @@ test("700px drawer behavior retains the current project and visible unavailable 
   });
   await load();
   expect(screen.getByRole("alert").textContent).toContain("/unmounted/project");
-  fireEvent.click(screen.getByRole("button", { name: /Agent Review/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Files" }));
   expect(document.querySelector(".app")?.classList.contains("rail-open")).toBe(
     true,
   );
@@ -546,9 +590,7 @@ test("700px drawer behavior retains the current project and visible unavailable 
   expect(document.querySelector(".app")?.classList.contains("panel-open")).toBe(
     true,
   );
-  fireEvent.change(screen.getByRole("combobox", { name: "Theme" }), {
-    target: { value: "dark" },
-  });
+  chooseTheme("dark");
   expect(document.documentElement.dataset.theme).toBe("dark");
   expect(screen.getByText("/unmounted/project")).toBeTruthy();
 });
@@ -636,9 +678,7 @@ test("a folder registration failure preserves the selected review and unsaved dr
   fireEvent.click(
     within(screen.getByRole("dialog")).getByRole("button", { name: "Cancel" }),
   );
-  expect(
-    (screen.getByLabelText("Registered worktree") as HTMLSelectElement).value,
-  ).toBe("repo");
+  expect(selectedProject("worktree")).toBe(true);
   expect(
     (screen.getByLabelText("Comment body") as HTMLTextAreaElement).value,
   ).toBe("Keep this draft through a failed folder selection");
@@ -663,9 +703,7 @@ test("dismissed older registration retains inventory without replacing a newer r
   fireEvent.keyDown(screen.getByRole("dialog"), {
     key: "Escape",
   });
-  fireEvent.change(screen.getByLabelText("Registered worktree"), {
-    target: { value: otherRepo.id },
-  });
+  fireEvent.click(screen.getByRole("tab", { name: "other" }));
   await screen.findByRole("button", { name: "old line 1" });
   fireEvent.click(screen.getByRole("button", { name: "Add comment" }));
   fireEvent.change(screen.getByLabelText("Comment body"), {
@@ -678,15 +716,11 @@ test("dismissed older registration retains inventory without replacing a newer r
     projectId: "new-project",
   });
   await new Promise((resolve) => setTimeout(resolve, 0));
-  expect(
-    (screen.getByLabelText("Registered worktree") as HTMLSelectElement).value,
-  ).toBe(otherRepo.id);
+  expect(selectedProject("other")).toBe(true);
   expect(
     (screen.getByLabelText("Comment body") as HTMLTextAreaElement).value,
   ).toBe("Newer root draft");
-  expect(
-    screen.getByRole("option", { name: /new · \/fixture\/new/ }),
-  ).toBeTruthy();
+  expect(screen.getByRole("tab", { name: "new" })).toBeTruthy();
 });
 test("an older selection error cannot replace the newer selected-root state or its draft", async () => {
   multipleRepositories();
@@ -701,13 +735,9 @@ test("an older selection error cannot replace the newer selected-root state or i
     return original(url, init);
   });
   await load();
-  fireEvent.change(screen.getByLabelText("Registered worktree"), {
-    target: { value: otherRepo.id },
-  });
+  fireEvent.click(screen.getByRole("tab", { name: "other" }));
   await waitFor(() => expect(requested).toBe(true));
-  fireEvent.change(screen.getByLabelText("Registered worktree"), {
-    target: { value: repo.id },
-  });
+  fireEvent.click(screen.getByRole("tab", { name: "worktree" }));
   await screen.findByRole("button", { name: "old line 1" });
   fireEvent.click(screen.getByRole("button", { name: "Add comment" }));
   fireEvent.change(screen.getByLabelText("Comment body"), {
@@ -716,9 +746,7 @@ test("an older selection error cannot replace the newer selected-root state or i
   held.resolve({ error: "Old selection failed" }, 400);
   await new Promise((resolve) => setTimeout(resolve, 0));
   expect(screen.queryByText("Old selection failed")).toBeNull();
-  expect(
-    (screen.getByLabelText("Registered worktree") as HTMLSelectElement).value,
-  ).toBe(repo.id);
+  expect(selectedProject("worktree")).toBe(true);
   expect(
     (screen.getByLabelText("Comment body") as HTMLTextAreaElement).value,
   ).toBe("Latest draft");
@@ -741,9 +769,7 @@ test.each([false, true])(
     fireEvent.keyDown(screen.getByRole("dialog"), {
       key: "Escape",
     });
-    fireEvent.change(screen.getByLabelText("Registered worktree"), {
-      target: { value: otherRepo.id },
-    });
+    fireEvent.click(screen.getByRole("tab", { name: "other" }));
     await screen.findByRole("button", { name: "old line 1" });
     if (unmount) cleanup();
     held.resolve({ error: "Old registration failed" }, 400);

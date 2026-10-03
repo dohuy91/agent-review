@@ -1,0 +1,143 @@
+.agent-settings {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.agent-settings > label {
+  font-weight: 600;
+}
+.agent-folder-control {
+  display: flex;
+  gap: 10px;
+}
+.agent-folder-control input {
+  flex: 1;
+  min-width: 0;
+}
+.agent-folder-control button {
+  white-space: nowrap;
+}
+.agent-settings input[type="search"],
+.agent-folder-control input {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 10px 12px;
+  background: var(--bg);
+  color: inherit;
+}
+.agent-settings small {
+  color: var(--muted);
+}
+.agent-adapter-control {
+  display: flex;
+  align-items: center;
+  gap: 26px;
+  margin-top: 8px;
+}
+.agent-adapter-control select {
+  min-width: 200px;
+  max-width: 100%;
+}
+.agent-skill-groups {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.agent-skill-group-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px 5px;
+  font-size: 12px;
+}
+.agent-skill-group-heading strong {
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 600;
+}
+.agent-skill-group-heading small {
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+.agent-skill-option {
+  display: grid;
+  grid-template-columns: 18px minmax(110px, 1fr) minmax(100px, 1.3fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+}
+.agent-skill-option.selected {
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg));
+}
+.agent-skill-option > span,
+.agent-skill-option > small {
+  overflow-wrap: anywhere;
+}
+.agent-skill-source {
+  border-radius: 5px;
+  padding: 3px 8px;
+  font-size: 12px;
+  background: var(--panel);
+}
+.agent-skill-source.project {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg));
+}
+.agent-skills-empty {
+  display: block;
+  padding: 10px 12px;
+}
+.agent-no-skill {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  font-size: 13px;
+}
+.agent-folder-picker {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+}
+.agent-folder-picker p {
+  overflow-wrap: anywhere;
+}
+.agent-folder-list {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  max-height: 170px;
+  overflow: auto;
+  margin-bottom: 12px;
+}
+.agent-folder-picker > button {
+  margin-right: 8px;
+}
+.agent-settings-footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+.agent-settings-saved {
+  color: var(--success, #168044);
+  margin: 4px 0;
+  font-size: 13px;
+}
+@media (max-width: 650px) {
+  .agent-skill-option {
+    grid-template-columns: 18px 1fr auto;
+  }
+  .agent-skill-option > small {
+    grid-column: 2 / 4;
+  }
+  .agent-folder-control {
+    flex-wrap: wrap;
+  }
+  .agent-skill-group-heading {
+    flex-wrap: wrap;
+  }
+}

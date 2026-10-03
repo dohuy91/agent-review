@@ -37,6 +37,15 @@ installDOM();
 const { cleanup, configure, fireEvent, render, screen, waitFor } =
   await import("@testing-library/react");
 configure({ asyncUtilTimeout: 8000 });
+const {
+  chooseTheme,
+  selectedTheme,
+  openProfiles,
+  chooseBase,
+  advancedBase,
+  openFileActions,
+  selectedProject,
+} = await import("./workspace-helpers.js");
 beforeEach(installDOM);
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
@@ -44,6 +53,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createApp } from "../apps/server/src/app.js";
 import App from "../apps/web/src/App.js";
+
 import * as reviewModule from "../packages/git/src/review.js";
 const dirs: string[] = [],
   apps: Awaited<ReturnType<typeof createApp>>[] = [];
@@ -143,7 +153,7 @@ async function fixture(mode: "working" | "staged") {
   });
   render(<App />);
   await screen.findByRole("button", { name: "old line 1" });
-  await screen.findByText("https://example.test/fixture.git");
+  openFileActions();
   return {
     root,
     state,
@@ -189,12 +199,10 @@ test("owned real Git fixture flows through React→authenticated HTTP hunk stage
   await screen.findByRole("button", { name: "old line 1" });
   await waitFor(() =>
     expect(
-      screen
-        .getByRole("button", { name: "Fetch origin" })
-        .hasAttribute("disabled"),
+      screen.getByRole("button", { name: "Fetch" }).hasAttribute("disabled"),
     ).toBe(false),
   );
-  fireEvent.click(screen.getByRole("button", { name: "Fetch origin" }));
+  fireEvent.click(screen.getByRole("button", { name: "Fetch" }));
   await waitFor(() => expect(f.fetches()).toBe(1));
   expect(f.git("rev-parse", "HEAD")).toBe(head);
   expect(await readFile(join(f.root, "a.ts"))).toEqual(bytes);
@@ -246,9 +254,7 @@ test("owned staged fixture confirms discard then commits only checked index byte
 
 test("React reload preserves the accepted selected-root base/mode and the same context remains after server restart", async () => {
   const f = await fixture("working");
-  fireEvent.change(screen.getByLabelText("Base reference"), {
-    target: { value: "main" },
-  });
+  chooseBase("main");
   fireEvent.change(screen.getByLabelText("Review mode"), {
     target: { value: "staged" },
   });
@@ -261,9 +267,8 @@ test("React reload preserves the accepted selected-root base/mode and the same c
   cleanup();
   render(<App />);
   await screen.findByTestId("diff");
-  expect(
-    (screen.getByLabelText("Base reference") as HTMLInputElement).value,
-  ).toBe("main");
+  expect((advancedBase() as HTMLInputElement).value).toBe("main");
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
   expect(
     (screen.getByLabelText("Review mode") as HTMLSelectElement).value,
   ).toBe("staged");
@@ -353,13 +358,11 @@ test("network-reordered React selection requests preserve the latest displayed r
     }
     return original(url, init);
   });
-  fireEvent.change(screen.getByLabelText("Registered worktree"), {
-    target: { value: otherId },
-  });
+  fireEvent.click(
+    screen.getByRole("tab", { name: otherRoot.split("/").at(-1)! }),
+  );
   await waitFor(() => expect(delayed).toBe(true));
-  fireEvent.change(screen.getByLabelText("Registered worktree"), {
-    target: { value: first.selectedRepositoryId },
-  });
+  fireEvent.click(screen.getByRole("tab", { name: f.root.split("/").at(-1)! }));
   await screen.findByRole("button", { name: "old line 1" });
   fireEvent.click(screen.getByRole("button", { name: "Add comment" }));
   fireEvent.change(screen.getByLabelText("Comment body"), {
@@ -372,9 +375,7 @@ test("network-reordered React selection requests preserve the latest displayed r
   );
   release();
   await new Promise((resolve) => setTimeout(resolve, 80));
-  expect(
-    (screen.getByLabelText("Registered worktree") as HTMLSelectElement).value,
-  ).toBe(first.selectedRepositoryId);
+  expect(selectedProject(f.root.split("/").at(-1)!)).toBe(true);
   expect(
     (screen.getByLabelText("Comment body") as HTMLTextAreaElement).value,
   ).toBe("Keep latest root draft");
@@ -466,7 +467,12 @@ test("local and remote selectors switch through an explicit retained stash and r
   );
   fireEvent.focus(screen.getByLabelText("Local target branch"));
   fireEvent.click(screen.getByRole("option", { name: "feature" }));
-  await waitFor(() => expect(f.actions.find((action) => action.url.endsWith("/branch-switch-preview"))?.result).toMatchObject({status:"dirty"}));
+  await waitFor(() =>
+    expect(
+      f.actions.find((action) => action.url.endsWith("/branch-switch-preview"))
+        ?.result,
+    ).toMatchObject({ status: "dirty" }),
+  );
   fireEvent.click(
     await screen.findByRole("button", { name: "Stash & switch" }),
   );
@@ -493,10 +499,87 @@ test("local and remote selectors switch through an explicit retained stash and r
   await screen.findByRole("button", { name: "new line 1" });
   expect(
     (screen.getByLabelText("Local target branch") as HTMLInputElement).value,
-  ).toBe("refs/heads/feature");
+  ).toBe("feature");
   expect(
     (screen.getByLabelText("Remote base branch") as HTMLInputElement).value,
-  ).toBe("refs/remotes/origin/main");
+  ).toBe("origin/main");
   expect(f.git("symbolic-ref", "HEAD")).toBe("refs/heads/feature");
   expect(f.git("status", "--porcelain=v1")).toBe("");
 }, 20000);
+
+test("actual conflict Refresh distinguishes external edits from git add and retains pending MERGE_HEAD until confirmed Continue", async () => {
+  const f = await fixture("working");
+  f.git("reset", "--hard", "HEAD");
+  f.git("checkout", "-qb", "incoming");
+  await writeFile(join(f.root, "a.ts"), "incoming conflict\n");
+  f.git("add", "a.ts");
+  f.git("commit", "-qm", "incoming conflict");
+  const incoming = f.git("rev-parse", "HEAD");
+  f.git("checkout", "-q", "main");
+  await writeFile(join(f.root, "a.ts"), "local conflict\n");
+  f.git("add", "a.ts");
+  f.git("commit", "-qm", "local conflict");
+  f.git("update-ref", "refs/remotes/origin/incoming", incoming);
+  fireEvent.click(screen.getByRole("button", { name: "Refresh review" }));
+  const comparison = screen.getByRole("combobox", {
+    name: "Remote base branch",
+  });
+  fireEvent.focus(comparison);
+  const branch = await screen.findByRole("option", { name: "origin/incoming" });
+  fireEvent.click(branch);
+  await waitFor(() =>
+    expect(
+      (screen.getByRole("button", { name: "Pull" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Pull" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Confirm pull" }));
+  await screen.findByText(/1 file needs resolution/);
+  expect(f.git("rev-parse", "MERGE_HEAD")).toBe(incoming);
+  await screen.findByRole("button", { name: "new line 1" });
+  // Gutters render in React's commit; CodeMirror mounts in a passive effect.
+  // Wait for the actual conflict source, rather than inferring editor readiness
+  // from the independently mounted gutter.
+  await waitFor(() =>
+    expect(document.querySelector(".cm-content")?.textContent).toContain(
+      "<<<<<<< HEAD",
+    ),
+  );
+  await writeFile(join(f.root, "a.ts"), "manually resolved\n");
+  fireEvent.click(screen.getByRole("button", { name: "Refresh review" }));
+  await waitFor(() =>
+    expect(document.querySelector(".cm-content")?.textContent).toContain(
+      "manually resolved",
+    ),
+  );
+  expect(
+    (
+      screen.getByRole("button", {
+        name: "Continue merge",
+      }) as HTMLButtonElement
+    ).disabled,
+  ).toBe(true);
+  expect(screen.getByText(/1 file needs resolution/)).toBeTruthy();
+  f.git("add", "a.ts");
+  fireEvent.click(screen.getByRole("button", { name: "Refresh review" }));
+  await waitFor(() =>
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "Continue merge",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(false),
+  );
+  expect(f.git("rev-parse", "MERGE_HEAD")).toBe(incoming);
+  fireEvent.click(screen.getByRole("button", { name: "Continue merge" }));
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Confirm continue" }),
+  );
+  await waitFor(() => expect(screen.queryByText(/Merge paused/)).toBeNull());
+  expect(
+    f.git("rev-list", "--parents", "-n", "1", "HEAD").split(" "),
+  ).toHaveLength(3);
+  expect(f.git("status", "--porcelain=v1")).toBe("");
+}, 25000);

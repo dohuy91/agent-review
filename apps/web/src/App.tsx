@@ -36,6 +36,20 @@ import type { PaneWidths } from "./paneLayout.js";
 import AgentPanel from "./components/AgentPanel.js";
 import GitActions, { type GitActionsHandle } from "./components/GitActions.js";
 import Preferences from "./components/Preferences.js";
+import ProjectTabs from "./components/ProjectTabs.js";
+import ProjectSettings, {
+  type SettingsTab,
+} from "./components/ProjectSettings.js";
+import SyncActions, {
+  FetchStatus,
+  useRepositorySync,
+} from "./components/SyncActions.js";
+import PushActions from "./components/PushActions.js";
+import type { ComparisonPushDestination } from "../../../packages/shared/src/push.js";
+import type {
+  GitCapabilities,
+  GitRemotesResponse,
+} from "../../../packages/shared/src/index.js";
 import {
   loadPreferences,
   savePreferences,
@@ -57,6 +71,21 @@ export default function App() {
   const [gitDialogOpen, setGitDialogOpen] = useState(false),
     [gitFileEnabled, setGitFileEnabled] = useState(false);
   const gitActions = useRef<GitActionsHandle>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false),
+    [settingsTab, setSettingsTab] = useState<SettingsTab>("Git"),
+    [settingsRevision, setSettingsRevision] = useState(0),
+    [workflowOpen, setWorkflowOpen] = useState(false),
+    [commentsCollapsed, setCommentsCollapsed] = useState(false),
+    [syncDialogOpen, setSyncDialogOpen] = useState(false),
+    [mergeDialogOpen, setMergeDialogOpen] = useState(false),
+    [pushDialogOpen, setPushDialogOpen] = useState(false);
+  const [toolbarSettingsReady, setToolbarSettingsReady] = useState(false);
+  const [defaultRemote, setDefaultRemote] = useState<string | null>(null),
+    [toolbarRemotes, setToolbarRemotes] = useState<string[]>([]),
+    [pushDestinations, setPushDestinations] = useState<
+      ComparisonPushDestination[]
+    >([]),
+    [toolbarWritesEnabled, setToolbarWritesEnabled] = useState(false);
   const navigation = useRef({
     revision: 0,
     generation: 0,
@@ -162,6 +191,7 @@ export default function App() {
     [markBusy, setMarkBusy] = useState(false),
     [rangeStale, setRangeStale] = useState(false),
     [watchStatus, setWatchStatus] = useState("Connecting live updates…");
+  const synchronization = useRepositorySync(repoId);
   const liveReview = useRef<ReviewObservation | null>(null),
     liveHandler = useRef<() => Promise<ReviewObservation | null>>(
       async () => null,
@@ -201,6 +231,10 @@ export default function App() {
     registerOpen ||
     agentDialogOpen ||
     gitDialogOpen ||
+    settingsOpen ||
+    syncDialogOpen ||
+    mergeDialogOpen ||
+    pushDialogOpen ||
     !!branchSwitchTarget;
   function resetDraft() {
     setRangeStale(false);
@@ -214,6 +248,7 @@ export default function App() {
     if (branchSwitchBusy.current) return;
     setBranchSwitchTarget(null);
     setHelp(false);
+    setSettingsOpen(false);
     setProfileOpen(false);
     if (registerOpen) {
       const intent = beginNavigation(repoId);
@@ -335,7 +370,6 @@ export default function App() {
     setDiffPending(true);
     setDiff(null);
     setSelection(null);
-    resetDraft();
     setError("");
     void Promise.all([
       api<BranchesResponse>(`${prefix}/branches`).then((response) => {
@@ -376,6 +410,7 @@ export default function App() {
   }, [repoId, base, mode, target, historicalId, refresh]);
   liveHandler.current = async () => {
     if (!review || review.historical) return null;
+    void synchronization.refresh();
     const request = ++epoch.current;
     const fileRequest = ++fileEpoch.current;
     setDiffPending(true);
@@ -417,8 +452,18 @@ export default function App() {
           new Set(m.r.files.filter((f) => f.reviewed).map((f) => f.path)),
         );
         setProfiles(m.p);
-        // Keep selected path pinned even when it disappears; never move an unsaved body.
-        if (!o.files.some((f) => f.path === selectedPath)) {
+        // A previously empty comparison may gain files after Pull. Existing
+        // selected paths and drafts stay pinned until explicit navigation.
+        if (
+          !selectedPath &&
+          !presentationSnapshot.current.creating &&
+          !draft.editing
+        )
+          setPath(o.files[0]?.path || "");
+        else if (
+          selectedPath &&
+          !o.files.some((f) => f.path === selectedPath)
+        ) {
           setDiff(null);
           setError("Selected file disappeared. Choose a file explicitly.");
         }
@@ -469,7 +514,6 @@ export default function App() {
     if (!live) {
       setDiff(null);
       setSelection(null);
-      resetDraft();
       hunk.current = -1;
     }
     if (!review.files.some((f) => f.path === path)) return;
@@ -482,7 +526,15 @@ export default function App() {
             fail(new Error("File response does not match the current review"));
             return;
           }
-          selectionContext.current = null;
+          const saved = draftPresentations.current.get(draftScope);
+          if (
+            saved?.context?.reviewId === review.id &&
+            saved.context.path === path &&
+            saved.context.target === target
+          ) {
+            selectionContext.current = saved.context;
+            setRangeStale(false);
+          } else selectionContext.current = null;
           setSelection(null);
           setDiff(d);
           setDiffPending(false);
@@ -589,11 +641,54 @@ export default function App() {
       }
     }
   }
+  const draftScope = JSON.stringify([
+    repoId,
+    base,
+    mode,
+    target,
+    historicalId,
+    path,
+  ]);
   const draft = useCommentDraft({
     revision: draftRevision,
+    scope: draftScope,
     onSave: saveComment,
     onUpdate: updateComment,
     onComplete: () => setCreating(false),
+  });
+  type DraftPresentation = {
+    creating: boolean;
+    target: Selection | null;
+    context: typeof selectionContext.current;
+  };
+  const draftPresentations = useRef(new Map<string, DraftPresentation>());
+  const previousDraftScope = useRef(draftScope);
+  const presentationSnapshot = useRef<DraftPresentation>({
+    creating,
+    target: draftTarget,
+    context: selectionContext.current,
+  });
+  useLayoutEffect(() => {
+    if (previousDraftScope.current === draftScope) return;
+    draftPresentations.current.set(
+      previousDraftScope.current,
+      presentationSnapshot.current,
+    );
+    const saved = draftPresentations.current.get(draftScope);
+    setCreating(saved?.creating ?? false);
+    setDraftTarget(saved?.target ?? null);
+    selectionContext.current = saved?.context ?? null;
+    setRangeStale(!!saved?.target);
+    setCommentSurface("sidebar");
+    previousDraftScope.current = draftScope;
+    draftEpoch.current++;
+  }, [draftScope]);
+  useLayoutEffect(() => {
+    presentationSnapshot.current = {
+      creating,
+      target: draftTarget,
+      context: selectionContext.current,
+    };
   });
   const composing = creating || !!draft.editing;
   // A disappearing/refreshed inline anchor must never hide the unsaved body.
@@ -713,6 +808,7 @@ export default function App() {
     setBranchSwitchNotice("");
     const intent = beginNavigation(id);
     if (id !== repoId) {
+      setWorkflowOpen(false);
       epoch.current++;
       fileEpoch.current++;
       setDiffPending(true);
@@ -821,7 +917,7 @@ export default function App() {
         unstage: () => gitActions.current?.unstage(),
         discard: () => gitActions.current?.discard(),
         commit: () => gitActions.current?.commit(),
-        fetch: () => gitActions.current?.fetch(),
+        fetch: () => void synchronization.fetchAll(),
       };
       actions[action]();
     }
@@ -841,7 +937,10 @@ export default function App() {
   ]);
   function refreshReview() {
     if (review && !review.historical) liveHandler.current();
-    else setRefresh((value) => value + 1);
+    else {
+      void synchronization.refresh();
+      setRefresh((value) => value + 1);
+    }
   }
   async function register(selectedRoot: string) {
     const intent = beginNavigation(repoId);
@@ -931,60 +1030,73 @@ export default function App() {
       if (generation === epoch.current) fail(e);
     }
   }
+  useEffect(() => {
+    let alive = true;
+    setToolbarSettingsReady(false);
+    setDefaultRemote(null);
+    setToolbarRemotes([]);
+    setPushDestinations([]);
+    setToolbarWritesEnabled(false);
+    if (!repoId) return;
+    void Promise.all([
+      api<
+        GitRemotesResponse & {
+          comparisonDestinations?: ComparisonPushDestination[];
+        }
+      >(`${prefix}/remotes`),
+      api<{ defaultRemote: string | null }>(`${prefix}/git-settings`),
+      api<GitCapabilities>(`${prefix}/capabilities`),
+    ])
+      .then(([remoteInfo, settings, capabilities]) => {
+        if (!alive) return;
+        setToolbarRemotes(
+          (remoteInfo.remotes ?? []).map((remote) => remote.name),
+        );
+        setPushDestinations(remoteInfo.comparisonDestinations ?? []);
+        setToolbarSettingsReady(true);
+        setDefaultRemote(settings.defaultRemote ?? null);
+        setToolbarWritesEnabled(!!capabilities.writesEnabled);
+      })
+      .catch((e) => {
+        if (alive) fail(e);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [repoId, review?.id, settingsRevision]);
+  function openSettings(tab: SettingsTab = "Git") {
+    setSettingsTab(tab);
+    setSettingsOpen(true);
+  }
+  function changeTheme(nextTheme: ThemePreference) {
+    setTheme(nextTheme);
+    try {
+      persistPreferences({ theme: nextTheme });
+    } catch (e) {
+      fail(e);
+    }
+  }
   return (
     <div
-      className={`app ${rail ? "rail-open" : ""} ${panel ? "panel-open" : ""}`}
+      className={`app ${rail ? "rail-open" : ""} ${panel ? "panel-open" : ""} ${commentsCollapsed ? "comments-collapsed" : ""}`}
     >
       <header className="topbar" inert={modalOpen}>
-        <button className="brand" onClick={() => setRail(!rail)}>
-          <span className="brand-icon">▤</span> Agent Review
-        </button>
-        <span className="local-pill">● Local</span>
-        <small role="status">{watchStatus}</small>
-        <div className="top-actions">
-          <button
-            onClick={() => {
-              setRegistrationError("");
-              setRegistrationBusy(false);
-              setRegisterOpen(true);
-            }}
-          >
-            ＋ Open repository
-          </button>
-          <button
-            disabled={!!review?.historical}
-            onClick={() => setProfileOpen(true)}
-          >
-            Fix profiles
-          </button>
-          <label className="theme-preference">
-            Theme
-            <select
-              value={theme}
-              onChange={(event) => {
-                const nextTheme = event.target.value as ThemePreference;
-                setTheme(nextTheme);
-                try {
-                  persistPreferences({ theme: nextTheme });
-                } catch (e) {
-                  fail(e);
-                }
-              }}
-            >
-              <option value="system">System</option>
-              <option value="light">Light</option>
-              <option value="dark">Dark</option>
-            </select>
-          </label>
-          <button aria-label="Keyboard shortcuts" onClick={() => setHelp(true)}>
-            ?
-          </button>
-        </div>
+        <ProjectTabs
+          repositories={repositories}
+          selected={repoId}
+          onSelect={selectRepository}
+          onOpen={() => {
+            setRegistrationError("");
+            setRegistrationBusy(false);
+            setRegisterOpen(true);
+          }}
+        />
       </header>
       <div className="review-toolbar" inert={modalOpen}>
         <div className="context branch-comparison">
           <BranchCombobox
-            label="Local target branch"
+            label="Local branch"
+            accessibleLabel="Local target branch"
             value={selectedTarget}
             placeholder={
               selectedTarget
@@ -1000,9 +1112,9 @@ export default function App() {
             onChange={selectTarget}
             disabled={loading || (!review && !target)}
           />
-          <span className="against">against</span>
           <BranchCombobox
-            label="Remote base branch"
+            label="Compare with"
+            accessibleLabel="Remote base branch"
             value={remoteBranches.includes(base) ? base : ""}
             placeholder="Search remote branches"
             options={remoteBranches.map((ref) => ({
@@ -1014,68 +1126,104 @@ export default function App() {
               chooseComparison(ref, mode);
             }}
           />
-          <select
-            aria-label="Review mode"
-            value={mode}
-            onChange={(e) =>
-              chooseComparison(base, e.target.value as ReviewMode)
-            }
-          >
-            <option value="full" disabled={otherTarget}>
-              Full changes
-            </option>
-            <option value="branch">Branch</option>
-            <option value="working" disabled={otherTarget}>
-              Working tree
-            </option>
-            <option value="staged" disabled={otherTarget}>
-              Staged
-            </option>
-          </select>
-          <button
-            aria-expanded={advancedBase}
-            aria-controls="advanced-base"
-            onClick={() => setAdvancedBase(!advancedBase)}
-          >
-            Advanced base
-          </button>
-          {!advancedBase && !remoteBranches.includes(base) && (
-            <small>Advanced base: {base}</small>
-          )}
-          <label id="advanced-base" hidden={!advancedBase}>
-            Advanced base
-            <input
-              aria-label="Base reference"
-              value={base}
-              onChange={(e) => chooseComparison(e.target.value, mode)}
-              list="base-branches"
-            />
-          </label>
-          <datalist id="base-branches">
-            {[...branches, ...remoteBranches].map((ref) => (
-              <option key={ref} value={ref} />
-            ))}
-          </datalist>
         </div>
-        <button aria-label="Refresh review" onClick={refreshReview}>
-          ↻
+        <SyncActions
+          repository={repository}
+          comparisonRef={base}
+          sync={synchronization.sync}
+          disabled={loading || !!review?.historical || otherTarget}
+          onChanged={refreshReview}
+          onDialogChange={setSyncDialogOpen}
+        />
+        <PushActions
+          repository={repository}
+          review={review}
+          enabled={
+            !loading &&
+            toolbarWritesEnabled &&
+            !synchronization.sync?.merge.pending
+          }
+          compact
+          defaultRemote={defaultRemote}
+          remotes={toolbarRemotes}
+          comparisonDestinations={pushDestinations}
+          onRefresh={refreshReview}
+          onDialogChange={setPushDialogOpen}
+        />
+        <AgentPanel
+          repositoryId={repoId}
+          reviewId={review?.id || ""}
+          comments={comments}
+          profile={profiles}
+          compact
+          useProjectSettings
+          settingsRevision={settingsRevision}
+          onOpenProfiles={() => openSettings("Agents")}
+          onDialogChange={setAgentDialogOpen}
+          readOnly={
+            !!review?.historical ||
+            loading ||
+            otherTarget ||
+            review?.executionEligible === false
+          }
+        />
+        <button
+          aria-label="Project settings"
+          title="Settings"
+          onClick={() => openSettings()}
+        >
+          ⚙
         </button>
       </div>
+      <div className="changes-toolbar" inert={modalOpen}>
+        <strong className="changes-tab">Changes</strong>
+        <select
+          aria-label="Review mode"
+          value={mode}
+          onChange={(e) => chooseComparison(base, e.target.value as ReviewMode)}
+        >
+          <option value="full" disabled={otherTarget}>
+            All changes
+          </option>
+          <option value="branch">Branch</option>
+          <option value="working" disabled={otherTarget}>
+            Working tree
+          </option>
+          <option value="staged" disabled={otherTarget}>
+            Staged
+          </option>
+        </select>
+        <span className="change-total">{review?.files.length || 0} files</span>
+      </div>
+      <SyncActions
+        repository={repository}
+        comparisonRef={base}
+        sync={synchronization.sync}
+        disabled={loading || !!review?.historical || otherTarget}
+        surface="banner"
+        onChanged={refreshReview}
+        onDialogChange={setMergeDialogOpen}
+        onResolve={() => chooseComparison(base, "working", null, "")}
+      />
       <div
         className="workspace"
         ref={workspace}
-        style={{ gridTemplateColumns: panes.gridTemplateColumns }}
+        style={{
+          gridTemplateColumns:
+            commentsCollapsed && panes.desktop
+              ? `${panes.widths.left}px 5px minmax(0, 1fr) 0px 42px`
+              : panes.gridTemplateColumns,
+        }}
         inert={modalOpen}
       >
         <Sidebar
-          repositories={repositories}
           selected={repoId}
-          onSelect={selectRepository}
           errors={registrationErrors}
           files={review?.files || []}
           selectedPath={path}
           reviewed={reviewed}
           comments={comments}
+          conflicts={synchronization.sync?.merge.conflicts ?? []}
           loading={loading}
           onSelectFile={(selectedPath) => {
             setPath(selectedPath);
@@ -1114,8 +1262,18 @@ export default function App() {
           )}
           <div className="file-toolbar">
             <span className="file-title">
-              ⌘ <strong>{path || "Review changes"}</strong>
+              <strong>{path || "Review changes"}</strong>
+              {synchronization.sync?.merge.conflicts.includes(path) && (
+                <span className="conflict-badge">Conflict</span>
+              )}
             </span>
+            <button
+              aria-label="Refresh review"
+              title="Refresh review and actual Git conflict state"
+              onClick={refreshReview}
+            >
+              ↻
+            </button>
             <div className="view-toggle">
               <button
                 className={!split ? "active" : ""}
@@ -1156,6 +1314,30 @@ export default function App() {
             >
               Add comment
             </button>
+            <div className="file-workflow">
+              <button
+                aria-label="File actions"
+                aria-expanded={workflowOpen}
+                onClick={() => setWorkflowOpen(!workflowOpen)}
+              >
+                •••
+              </button>
+              <div className="file-workflow-popover" hidden={!workflowOpen}>
+                <GitActions
+                  key={repoId}
+                  ref={gitActions}
+                  repository={repository}
+                  review={review}
+                  path={path}
+                  diffReady={canSelect}
+                  reviewReady={!loading}
+                  compact
+                  onRefresh={refreshReview}
+                  onDialogChange={setGitDialogOpen}
+                  onWritableChange={setGitFileEnabled}
+                />
+              </div>
+            </div>
             <button className="mobile-panel" onClick={() => setRail(!rail)}>
               Files
             </button>
@@ -1241,16 +1423,18 @@ export default function App() {
                   };
                   if (
                     !draft.editing &&
-                    (!creating ||
-                      !draft.body.trim() ||
-                      !draftTarget ||
-                      rangeStale)
+                    (!creating || !draft.body.trim() || !draftTarget)
                   ) {
                     draftEpoch.current++;
                     setDraftTarget(s);
                   }
                   setSelection(s);
-                  setRangeStale(false);
+                  if (!draft.body.trim() && !draft.editing)
+                    setRangeStale(false);
+                  if (!draft.editing) setCreating(true);
+                  setCommentSurface(
+                    rangeStale && !!draft.body.trim() ? "sidebar" : "inline",
+                  );
                 }}
               />
             ) : (
@@ -1267,19 +1451,6 @@ export default function App() {
               </div>
             )}
           </div>
-          <footer>
-            <span>
-              {review?.historical ? "Historical read-only · " : ""}
-              {review?.branch || repository?.branch || "Detached HEAD"} ·{" "}
-              {(review?.head || repository?.head)?.slice(0, 8) || "—"}
-            </span>
-            <span>
-              {selection
-                ? `${selection.side} ${selection.startLine}–${selection.endLine}`
-                : "Select a gutter line · Shift-click for a range"}
-            </span>
-            <button onClick={() => setHelp(true)}>Shortcuts ?</button>
-          </footer>
         </main>
         <PaneSeparator
           side="right"
@@ -1295,7 +1466,19 @@ export default function App() {
         <aside className="aux" id="details-pane">
           <div className="drawer-tabs">
             <button className="active" onClick={() => setPanel(true)}>
-              Comments <span>{comments.length}</span>
+              Review Comments <span>{comments.length}</span>
+            </button>
+            <button
+              className="comments-collapse"
+              aria-label={
+                commentsCollapsed
+                  ? "Expand comments pane"
+                  : "Collapse comments pane"
+              }
+              aria-expanded={!commentsCollapsed}
+              onClick={() => setCommentsCollapsed(!commentsCollapsed)}
+            >
+              «
             </button>
             <button className="mobile-close" onClick={() => setPanel(false)}>
               ×
@@ -1330,46 +1513,70 @@ export default function App() {
                 readOnly={!!review?.historical || loading}
               />
             </CollapsiblePanel>
-            <CollapsiblePanel title="Git actions">
-              <GitActions
-                key={repoId}
-                ref={gitActions}
-                repository={repository}
-                review={review}
-                path={path}
-                diffReady={canSelect}
-                reviewReady={!loading}
-                onRefresh={() => liveHandler.current()}
-                onDialogChange={setGitDialogOpen}
-                onWritableChange={setGitFileEnabled}
-              />
-            </CollapsiblePanel>
-            <CollapsiblePanel
-              title="Fix with agent"
-              count={
-                comments.filter(
-                  (c) => c.status === "open" && c.attachment === "current",
-                ).length
-              }
-            >
-              <AgentPanel
-                repositoryId={repoId}
-                reviewId={review?.id || ""}
-                comments={comments}
-                profile={profiles}
-                onOpenProfiles={() => setProfileOpen(true)}
-                onDialogChange={setAgentDialogOpen}
-                readOnly={
-                  !!review?.historical ||
-                  loading ||
-                  otherTarget ||
-                  review?.executionEligible === false
-                }
-              />
-            </CollapsiblePanel>
           </div>
         </aside>
       </div>
+      <footer className="workspace-status" inert={modalOpen}>
+        <span>
+          {review?.historical ? "Historical read-only · " : ""}
+          {review?.branch?.replace(/^refs\/heads\//, "") ||
+            repository?.branch?.replace(/^refs\/heads\//, "") ||
+            "Detached HEAD"}{" "}
+          ·{" "}
+          {synchronization.sync?.merge.pending
+            ? "Merge in progress"
+            : "Working tree"}
+        </span>
+        <small title={watchStatus}>{watchStatus}</small>
+        <button aria-label="Keyboard shortcuts" onClick={() => setHelp(true)}>
+          Shortcuts ?
+        </button>
+        <FetchStatus
+          sync={synchronization.sync}
+          fetching={synchronization.fetching}
+          error={synchronization.error}
+          onFetch={() => void synchronization.fetchAll().then(refreshReview)}
+        />
+      </footer>
+      {settingsOpen && (
+        <Modal label="Project settings" onClose={() => setSettingsOpen(false)}>
+          <ProjectSettings
+            repository={
+              repository && synchronization.sync?.actual
+                ? {
+                    ...repository,
+                    branch: synchronization.sync.actual.branch,
+                    head: synchronization.sync.actual.head,
+                  }
+                : repository
+            }
+            reviewId={review?.id || ""}
+            comparisonRef={base}
+            baseOptions={[...branches, ...remoteBranches]}
+            onComparison={(ref) => chooseComparison(ref, mode)}
+            defaultRemote={defaultRemote}
+            gitReady={toolbarSettingsReady}
+            remotes={toolbarRemotes}
+            initialTab={settingsTab}
+            theme={theme}
+            onTheme={changeTheme}
+            onSaved={(remote) => {
+              setDefaultRemote(remote);
+              void synchronization.refresh();
+            }}
+            onAgentSaved={() => setSettingsRevision((value) => value + 1)}
+            onClose={() => setSettingsOpen(false)}
+            onShortcuts={() => {
+              setSettingsOpen(false);
+              setHelp(true);
+            }}
+            onProfiles={() => {
+              setSettingsOpen(false);
+              setProfileOpen(true);
+            }}
+          />
+        </Modal>
+      )}
       {(help || profileOpen || registerOpen) && (
         <Modal onClose={closeModal}>
           {help ? (

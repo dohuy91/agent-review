@@ -87,7 +87,10 @@ test('conflicts and submodules are explicit, and local refs are available', asyn
     catch { }
     r = await getReview(repo, 'base', 'working');
     expect(r.files.some(f => f.path === 'a.txt' && f.kind === 'conflict')).toBe(true);
-    expect((await getFileDiff(repo, r, 'a.txt')).unsupportedReason).toMatch(/conflict/);
+    const conflict = await getFileDiff(repo, r, 'a.txt');
+    expect(conflict.unsupportedReason).toBeNull();
+    expect(conflict.oldContent).toBeNull();
+    expect(conflict.newContent).toContain('<<<<<<< HEAD');
 });
 import { createApp } from '../apps/server/src/app.js';
 test('authenticated HTTP exposes branches and rejects unknown or stale lazy ids', async () => {

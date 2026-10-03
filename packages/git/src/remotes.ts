@@ -4,6 +4,7 @@ import type { Repository, GitRemote } from "../../shared/src/index.js";
 import { git, gitText } from "./git.js";
 import {
   GitActionError,
+  RepositoryQueue,
   validateIdentity,
   validateWriteDestinations,
 } from "./mutations.js";
@@ -68,7 +69,25 @@ async function configuration(repo: Repository) {
     const value = split < 0 ? "" : entry.slice(split + 1);
     values.set(key, [...(values.get(key) ?? []), value]);
   }
-  return { bytes, values };
+  const worktreeRemotes = new Set<string>();
+  if (
+    (values.get("extensions.worktreeconfig") ?? []).some((value) =>
+      /^(true|yes|on|1)$/i.test(value),
+    )
+  ) {
+    const scoped = await git(repo.root, [
+      "config",
+      "--worktree",
+      "--null",
+      "--list",
+    ]);
+    for (const entry of scoped.toString("utf8").split("\0").filter(Boolean)) {
+      const key = entry.slice(0, entry.indexOf("\n"));
+      const name = /^remote\.(.+)\.[^.]+$/.exec(key)?.[1];
+      if (name) worktreeRemotes.add(name);
+    }
+  }
+  return { bytes, values, worktreeRemotes };
 }
 function describe(url: string): Pick<GitRemote, "transport" | "url"> {
   if (!url || /[\x00-\x20\x7f]/.test(url))
@@ -142,6 +161,9 @@ async function resolveRemote(
     );
   const metadata = describe(effective[0]!);
   let reason: string | null = null;
+  if (config.worktreeRemotes.has(name))
+    reason =
+      "Worktree-specific remote configuration is unsupported for project-wide Fetch; configure this remote in the shared Git configuration or use Git directly";
   if (metadata.transport === "unsupported")
     reason =
       "Only effective HTTPS and SSH remote URLs support Fetch; check URL rewrites";
@@ -223,12 +245,34 @@ export async function getRemotes(repo: Repository): Promise<GitRemote[]> {
   }
   return result;
 }
+const fetchQueue = new RepositoryQueue();
+/** Covers legacy explicit Fetch and lifecycle synchronization across linked worktrees. */
 export async function fetchRemote(
   repo: Repository,
   name: string,
   expectedHead: string,
   transport: FetchTransport = nativeFetchTransport,
   expectedBranch?: string | null,
+  noninteractive = false,
+) {
+  return fetchQueue.run(repo.commonDir, () =>
+    performFetchRemote(
+      repo,
+      name,
+      expectedHead,
+      transport,
+      expectedBranch,
+      noninteractive,
+    ),
+  );
+}
+async function performFetchRemote(
+  repo: Repository,
+  name: string,
+  expectedHead: string,
+  transport: FetchTransport = nativeFetchTransport,
+  expectedBranch?: string | null,
+  noninteractive = false,
 ) {
   const identity = await validateIdentity(repo);
   if (
@@ -257,7 +301,66 @@ export async function fetchRemote(
     GIT_NO_LAZY_FETCH: "1",
     GIT_OPTIONAL_LOCKS: "0",
   });
+  if (noninteractive) {
+    for (const [key, values] of config.values) {
+      if (
+        /^credential(?:\..+)?\.helper$/i.test(key) &&
+        values.some(
+          (value) =>
+            value &&
+            !/^(?:cache(?: --timeout=\d+)?|store(?: --file=[^\s;&|`$<>]+)?|manager|manager-core|osxkeychain|wincred|libsecret)$/.test(
+              value,
+            ),
+        )
+      )
+        throw new GitActionError(
+          "Configured custom credential helpers cannot guarantee noninteractive Fetch; use Git directly or configure a standard credential helper",
+        );
+      if (
+        /^credential\..+\.interactive$/i.test(key) &&
+        values.some((value) => !/^(false|no|off|0|never)$/i.test(value))
+      )
+        throw new GitActionError(
+          "URL-scoped interactive credential settings are unsupported for noninteractive Fetch",
+        );
+    }
+    // Automatic synchronization must never open an askpass dialog or interactive SSH prompt.
+    env.GIT_ASKPASS = "/bin/false";
+    env.SSH_ASKPASS = "/bin/false";
+    env.SSH_ASKPASS_REQUIRE = "never";
+    env.GCM_INTERACTIVE = "Never";
+    env.GCM_GUI_PROMPT = "0";
+    let ssh = env.GIT_SSH_COMMAND;
+    if (!ssh) {
+      try {
+        ssh = await gitText(repo.root, ["config", "--get", "core.sshCommand"]);
+      } catch (error) {
+        if ((error as { code?: number }).code !== 1) throw error;
+      }
+    }
+    const selectedSsh = ssh || env.GIT_SSH || "ssh";
+    const sshCommand = /^((?:\/[A-Za-z0-9_.-]+)*\/?ssh)(\s[\s\S]*)?$/.exec(
+      selectedSsh,
+    );
+    if (!sshCommand || /[;&|`$<>\r\n]/.test(selectedSsh))
+      throw new GitActionError(
+        "Custom SSH commands cannot guarantee noninteractive Fetch; use Git directly or configure standard OpenSSH",
+      );
+    // OpenSSH uses the first value for an option: put safety before existing overrides.
+    env.GIT_SSH_COMMAND = `${sshCommand[1]} -o BatchMode=yes -o StrictHostKeyChecking=yes${sshCommand[2] || ""}`;
+    env.GIT_SSH_VARIANT = "ssh";
+  }
   const args = [
+    ...(noninteractive
+      ? [
+          "-c",
+          "credential.interactive=false",
+          "-c",
+          "credential.guiPrompt=false",
+          "-c",
+          "core.askPass=/bin/false",
+        ]
+      : []),
     "--no-pager",
     "--no-replace-objects",
     "-c",
@@ -290,7 +393,9 @@ export async function fetchRemote(
     "--refmap=",
     "--",
     name,
-    `refs/heads/*:refs/remotes/${name}/*`,
+    ...(config.values.get(`remote.${name}.fetch`) ?? []).map((spec) =>
+      spec.replace(/^\+/, ""),
+    ),
   ];
   await validateIdentity(repo, identity);
   if (!(await configuration(repo)).bytes.equals(config.bytes))
@@ -311,5 +416,7 @@ export async function fetchRemote(
     );
   }
   await validateIdentity(repo, identity);
+  if (!(await configuration(repo)).bytes.equals(config.bytes))
+    throw new StaleReviewError();
   return { ok: true as const, remote: name };
 }

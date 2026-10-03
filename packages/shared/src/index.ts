@@ -324,3 +324,6 @@ export interface GitFetchRequest {
   remote: string;
   expectedHead: string;
 }
+
+export * from "./sync.js";
+export * from "./project-settings.js";

@@ -2,6 +2,7 @@ import type { ReviewFile } from "../../../../packages/shared/src/index.js";
 
 export interface ChangedFileNode {
   id: string;
+  group?: boolean;
   type: "folder" | "file";
   name: string;
   path: string;
@@ -114,7 +115,11 @@ export function visibleFileNodes(
         setSize: nodes.length,
         parentId,
       });
-      if (node.type === "folder" && !collapsed.has(node.path))
+      if (
+        node.type === "folder" &&
+        !collapsed.has(node.path) &&
+        !collapsed.has(node.id)
+      )
         visit(node.children, level + 1, node.id);
     });
   };

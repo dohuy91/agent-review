@@ -185,6 +185,31 @@ async function observe(
     });
   }
   if (mode === "working" || mode === "full") {
+    // Tree-to-worktree diffs can report an unmerged path as M/D (or omit it)
+    // rather than U. The actual index, not marker text, owns conflict membership.
+    const unmerged = new Set(
+      (await git(repo.root, ["ls-files", "--unmerged", "-z"]))
+        .toString("utf8")
+        .split("\0")
+        .filter(Boolean)
+        .map((record) => record.slice(record.indexOf("\t") + 1)),
+    );
+    for (let i = files.length - 1; i >= 0; i--)
+      if (unmerged.has(files[i]!.path)) files.splice(i, 1);
+    for (const path of unmerged)
+      files.push({
+        path,
+        oldPath: null,
+        status: "U",
+        kind: "conflict",
+        fingerprint: "",
+        // An unmerged index has no single old/new blob endpoint. Its only
+        // displayable source is the separately guarded mutable worktree text.
+        oldOid: null,
+        newOid: null,
+        oldMode: "000000",
+        newMode: "000000",
+      });
     const untracked = (
       await git(repo.root, ["ls-files", "--others", "--exclude-standard", "-z"])
     )
@@ -235,12 +260,16 @@ async function observe(
             String(s.ctimeNs),
             String(s.mode),
           ];
-          if (s.isSymbolicLink()) f.kind = "symlink";
-          else if (!s.isFile() && f.kind !== "submodule")
+          if (s.isSymbolicLink() && f.kind !== "conflict") f.kind = "symlink";
+          else if (
+            !s.isFile() &&
+            f.kind !== "submodule" &&
+            f.kind !== "conflict"
+          )
             f.kind = "unsupported";
         }
       } catch {
-        f.kind = "unsupported";
+        if (f.kind !== "conflict") f.kind = "unsupported";
         statIdentity = "unsafe";
       }
     }

@@ -1,0 +1,24 @@
+.agent-launch-error {
+  position: fixed;
+  bottom: 42px;
+  right: 20px;
+  z-index: 40;
+  width: min(380px, calc(100vw - 40px));
+  padding: 14px;
+  border: 1px solid var(--red-strong);
+  border-radius: 9px;
+  background: var(--bg);
+  box-shadow: 0 6px 24px #0002;
+  white-space: normal;
+}
+.agent-launch-error p {
+  line-height: 1.5;
+  margin: 8px 0 10px;
+}
+.agent-launch-error > div {
+  display: flex;
+  gap: 8px;
+}
+.agent-launch-error button {
+  border-color: var(--border);
+}

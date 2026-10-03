@@ -49,9 +49,14 @@ export default function CommentComposer({
             : "Select a line in the gutter"}
       </strong>
       {stale && !draft.editing && (
-        <p role="status">Range changed; select current lines before saving.</p>
+        <p role="status">
+          Range changed; select current lines before saving.
+          {selectedRange && (
+            <button onClick={onRetarget}>Use selected lines</button>
+          )}
+        </p>
       )}
-      {different && (
+      {different && !stale && (
         <div className="draft-target" role="status">
           Draft remains on {selection.side} lines {selection.startLine}–
           {selection.endLine}.

@@ -1,3 +1,6 @@
+import { refreshRegisteredRepositories } from "./repository-refresh.js";
+import { installSyncRoutes } from "./routes/sync.js";
+import { installProjectSettingsRoutes } from "./routes/project-settings.js";
 import { installGitActionRoutes } from "./routes/git-actions.js";
 import { installPushRoutes } from "./routes/push.js";
 import { installBranchSwitchRoutes } from "./routes/branches.js";
@@ -186,6 +189,7 @@ export async function createApp(options: AppOptions) {
       const repo = await registerRepository(body.path);
       validateDataLocation(repo);
       await registration.save(repo);
+      synchronization.admitRepository(repo);
       repositories.set(repo.id, repo);
       // Versioned browser registration is inventory-only. Its current client
       // performs selection separately, so dismissal cannot change durable navigation.
@@ -227,12 +231,42 @@ export async function createApp(options: AppOptions) {
     (req, id) => navigation.acceptsContext(req, id),
   );
   const queue = new RepositoryQueue();
+  installProjectSettingsRoutes(app, repositories, reviewAccess, store, {
+    ...options,
+    queue,
+  });
   const agentAccess = installAgentRoutes(
     app,
     repositories,
     reviewAccess,
     store,
     { ...options, queue },
+  );
+  const synchronization = installSyncRoutes(
+    app,
+    repositories,
+    reviewAccess,
+    store,
+    {
+      ...options,
+      queue,
+      admissionIdentity: (repository) =>
+        registration.expectedPhysicalIdentity(repository),
+      beforeTick: async () => {
+        restored.errors = await refreshRegisteredRepositories(
+          registration,
+          repositories,
+          validateDataLocation,
+          (repository) => synchronization.admitRepository(repository),
+        );
+      },
+      assertIdle: async (id) => {
+        if (agentAccess.hasActive(id))
+          throw Object.assign(new Error("An agent is still active"), {
+            statusCode: 409,
+          });
+      },
+    },
   );
   installCommentRoutes(app, repositories, reviewAccess, store);
   installWatchRoutes(app, repositories);

@@ -181,7 +181,7 @@ test("reviewed/all filters keep accurate visible folder counts and never auto-se
   expect(item("src").textContent).toContain("+3");
   fireEvent.change(filter, { target: { value: "all" } });
   expect(paths()).toEqual(["src", "src/pending.ts", "src/reviewed.ts"]);
-  expect(screen.getByText("1 reviewed")).toBeTruthy();
+  expect(screen.getByText("1 of 2 reviewed")).toBeTruthy();
   expect(onSelect).not.toHaveBeenCalled();
 });
 

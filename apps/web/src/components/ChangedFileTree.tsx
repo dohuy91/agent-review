@@ -32,6 +32,38 @@ const statusNames: Record<string, string> = {
   T: "Type changed",
   U: "Unmerged",
 };
+function FileIcon({ name }: { name: string }) {
+  const kind = name.endsWith(".json")
+    ? "json"
+    : name.endsWith(".md")
+      ? "markdown"
+      : "code";
+  return (
+    <svg
+      className={`changed-tree-file-icon changed-tree-file-icon-${kind}`}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {kind === "json" ? (
+        <path d="M9 3H7a2 2 0 0 0-2 2v4c0 2-1 3-3 3 2 0 3 1 3 3v4a2 2 0 0 0 2 2h2m6-18h2a2 2 0 0 1 2 2v4c0 2 1 3 3 3-2 0-3 1-3 3v4a2 2 0 0 1-2 2h-2" />
+      ) : (
+        <>
+          <path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zM14 3v6h6" />
+          {kind === "markdown" ? (
+            <path d="m8 17 3-4 3 2 3-4" />
+          ) : (
+            <path d="M8 13h8M8 17h5" />
+          )}
+        </>
+      )}
+    </svg>
+  );
+}
 const emptyReviewed = new Set<string>();
 const emptyComments: AttachedComment[] = [];
 function countsLabel(node: ChangedFileNode) {
@@ -390,24 +422,46 @@ export default function ChangedFileTree({
           >
             <span className="changed-tree-icon" aria-hidden="true">
               {isFolder ? (
-                expanded ? (
-                  "▾"
-                ) : (
-                  "▸"
-                )
+                <svg
+                  className={`changed-tree-chevron${expanded ? " expanded" : ""}`}
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                >
+                  <path d="m6 3 5 5-5 5" />
+                </svg>
               ) : (
-                <span className={`status status-${node.file?.status[0]}`}>
-                  {node.file?.status[0]}
-                </span>
+                <span
+                  className={`changed-tree-status changed-tree-status-${node.file?.status[0]}`}
+                  title={statusNames[node.file?.status[0] ?? ""] ?? "Changed"}
+                />
               )}
             </span>
+            {isFolder ? (
+              <svg
+                className="changed-tree-folder-icon"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M3 7V5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" />
+                <path d="M3 7h18" />
+              </svg>
+            ) : (
+              <FileIcon name={node.name} />
+            )}
             <span className="changed-tree-name">
               <span>{node.name}</span>
               {node.file?.oldPath && (
                 <small>Renamed from {node.file.oldPath}</small>
               )}
             </span>
-            {!isFolder && (
+            {!isFolder && (unavailableKind || notes > 0 || isReviewed) && (
               <span className="changed-tree-badges" aria-hidden="true">
                 {unavailableKind && (
                   <span
@@ -434,7 +488,11 @@ export default function ChangedFileTree({
             )}
           </button>
           {isFolder && expanded && (
-            <div role="group" id={groupId}>
+            <div
+              role="group"
+              id={groupId}
+              style={{ "--tree-level": level } as React.CSSProperties}
+            >
               {renderNodes(node.children, level + 1)}
             </div>
           )}
@@ -454,22 +512,6 @@ export default function ChangedFileTree({
         value={query}
         onChange={(event) => setQuery(event.target.value)}
       />
-      <div className="changed-tree-toolbar">
-        <span>{reviewedCount} reviewed</span>
-        <select
-          aria-label="Changed file filter"
-          value={filter}
-          onChange={(event) => {
-            const next = event.target.value as ChangedFileFilter;
-            if (controlledFilter === undefined) setLocalFilter(next);
-            onFilterChange?.(next);
-          }}
-        >
-          <option value="all">All</option>
-          <option value="unreviewed">Unreviewed</option>
-          <option value="reviewed">Reviewed</option>
-        </select>
-      </div>
       {loading && (
         <p className="changed-tree-message" role="status">
           Refreshing changed files…
@@ -496,6 +538,24 @@ export default function ChangedFileTree({
           </p>
         )
       )}
+      <div className="changed-tree-toolbar">
+        <span>
+          {reviewedCount} of {files.length} reviewed
+        </span>
+        <select
+          aria-label="Changed file filter"
+          value={filter}
+          onChange={(event) => {
+            const next = event.target.value as ChangedFileFilter;
+            if (controlledFilter === undefined) setLocalFilter(next);
+            onFilterChange?.(next);
+          }}
+        >
+          <option value="all">All</option>
+          <option value="unreviewed">Unreviewed</option>
+          <option value="reviewed">Reviewed</option>
+        </select>
+      </div>
     </section>
   );
 }

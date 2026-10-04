@@ -1472,23 +1472,6 @@ footer button {
   background: var(--panel);
   color: var(--muted);
 }
-.changed-tree-search {
-  display: block;
-  width: calc(100% - 14px);
-  margin: 6px 7px 9px;
-  font-size: 11px;
-}
-.changed-tree-heading h2 {
-  font-size: 12px;
-}
-.changed-tree-heading > span {
-  background: var(--panel);
-  border-radius: 10px;
-  padding: 2px 6px;
-}
-.changed-tree-row {
-  min-height: 34px;
-}
 .modal:has(.project-settings) {
   width: 810px;
   max-width: calc(100vw - 48px);
@@ -1689,26 +1672,102 @@ footer button {
   line-height: 1.45;
   font-size: 11px;
 }
-.modal:has(.project-settings) h2 { font-size: 24px; }
-.settings-tabs > button { font-size: 14px; }
-.settings-project { font-size: 14px; }
-.project-settings h3 { font-size: 16px; }
+.modal:has(.project-settings) h2 {
+  font-size: 24px;
+}
+.settings-tabs > button {
+  font-size: 14px;
+}
+.settings-project {
+  font-size: 14px;
+}
+.project-settings h3 {
+  font-size: 16px;
+}
 .project-settings .settings-row,
-.project-settings .settings-switch { font-size: 14px; }
-.project-settings section p { font-size: 12px; }
+.project-settings .settings-switch {
+  font-size: 14px;
+}
+.project-settings section p {
+  font-size: 12px;
+}
 @media (min-width: 1101px) {
-  .project-tabs > button { font-size: 15px; }
-  .review-toolbar > button, .pull-control > button, .split-push > button,
-  .agent-toolbar > button { font-size: 14px; }
-  .branch-picker > label { font-size: 12px; }
-  .branch-picker input, .branch-picker select { font-size: 14px; }
-  .changes-toolbar, .file-toolbar, .file-title { font-size: 14px; }
-  .file-toolbar button, .drawer-tabs > button:first-child { font-size: 13px; }
+  .project-tabs > button {
+    font-size: 15px;
+  }
+  .review-toolbar > button,
+  .pull-control > button,
+  .split-push > button,
+  .agent-toolbar > button {
+    font-size: 14px;
+  }
+  .branch-picker > label {
+    font-size: 12px;
+  }
+  .branch-picker input,
+  .branch-picker select {
+    font-size: 14px;
+  }
+  .changes-toolbar,
+  .file-toolbar,
+  .file-title {
+    font-size: 14px;
+  }
+  .file-toolbar button,
+  .drawer-tabs > button:first-child {
+    font-size: 13px;
+  }
 }
 
 /* Match the approved desktop workspace scale while preserving compact webviews. */
 @media (min-width: 901px) {
-  .topbar { height: 49px; }
-  .project-tabs > button { height: 45px; }
-  .review-toolbar { min-height: 76px; }
+  .topbar {
+    height: 49px;
+  }
+  .project-tabs > button {
+    height: 45px;
+  }
+  .review-toolbar {
+    min-height: 76px;
+  }
+}
+
+@media (min-width: 901px) {
+  .changes-toolbar {
+    min-height: 46px;
+    height: 46px;
+    font-size: 16px;
+  }
+  .changes-tab {
+    padding-top: 12px;
+  }
+  .file-toolbar {
+    height: 58px;
+    flex-shrink: 0;
+  }
+  .file-title {
+    font-size: 16px;
+  }
+  .file-toolbar button {
+    font-size: 14px;
+  }
+  .drawer-tabs {
+    height: 58px;
+    flex-shrink: 0;
+  }
+  .drawer-tabs > button:first-child {
+    font-size: 17px;
+    font-weight: 550;
+  }
+  .workspace-status {
+    height: 43px;
+    font-size: 14px;
+  }
+  .workspace-status > small,
+  .fetch-status {
+    font-size: 13px;
+  }
+  .fetch-status > button {
+    font-size: 14px;
+  }
 }

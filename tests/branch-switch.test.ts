@@ -1,8 +1,8 @@
-import { afterEach, expect, test } from "vitest";
+import { canonicalMkdtemp as mkdtemp } from "./filesystem-fixtures.js";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import Fastify from "fastify";
 import cookie from "@fastify/cookie";
 import {
-  mkdtemp,
   writeFile,
   readFile,
   rm,
@@ -340,33 +340,43 @@ test("commit switches only after selected staged files and the supplied message 
   expect(f.git("symbolic-ref", "HEAD")).toBe("refs/heads/other");
 });
 
-test("commit with remaining edits saves selected staged work and returns an explicit remaining-dirty decision", async () => {
-  const f = await fixture();
-  await writeFile(join(f.root, "b.txt"), "selected b\n");
-  f.git("add", "b.txt");
-  await writeFile(join(f.root, "a.txt"), "unstaged a\n");
-  await writeFile(join(f.root, "new.txt"), "untracked\n");
-  const r = await f.switchTo("commit", {
-    confirmed: true,
-    commit: { paths: ["b.txt"], message: "Only b" },
+describe("commit with remaining edits", () => {
+  let f: Awaited<ReturnType<typeof fixture>>;
+  let r: Awaited<ReturnType<Awaited<ReturnType<typeof fixture>>["switchTo"]>>;
+  beforeEach(async () => {
+    f = await fixture();
+    await writeFile(join(f.root, "b.txt"), "selected b\n");
+    f.git("add", "b.txt");
+    await writeFile(join(f.root, "a.txt"), "unstaged a\n");
+    await writeFile(join(f.root, "new.txt"), "untracked\n");
+    r = await f.switchTo("commit", {
+      confirmed: true,
+      commit: { paths: ["b.txt"], message: "Only b" },
+    });
+    expect(r.statusCode, r.body).toBe(409);
+    expect(r.json().outcome).toBe("saved-not-switched");
+  }, 5000);
+  test("saves selected staged work and returns an explicit remaining-dirty decision", async () => {
+    expect(r.statusCode, r.body).toBe(409);
+    expect(r.json()).toMatchObject({
+      outcome: "saved-not-switched",
+      reason: "remaining-dirty",
+      remainingDirty: { unstaged: ["a.txt"], untracked: ["new.txt"] },
+    });
+    expect(f.git("rev-parse", "main")).toBe(r.json().commit);
+    expect(f.repositories.get(f.repo.id)).toMatchObject({
+      branch: "refs/heads/main",
+      head: r.json().commit,
+    });
+    expect(f.git("symbolic-ref", "HEAD")).toBe("refs/heads/main");
+    expect(f.git("show", "main:a.txt")).toBe("main");
+    expect(await readFile(join(f.root, "a.txt"), "utf8")).toBe("unstaged a\n");
+    expect(f.git("stash", "list")).toBe("");
   });
-  expect(r.statusCode, r.body).toBe(409);
-  expect(r.json()).toMatchObject({
-    outcome: "saved-not-switched",
-    reason: "remaining-dirty",
-    remainingDirty: { unstaged: ["a.txt"], untracked: ["new.txt"] },
+  test("allows an explicit stash decision after saving without switching", async () => {
+    const continued = await f.switchTo("stash", { confirmed: true });
+    expect(continued.statusCode, continued.body).toBe(200);
   });
-  expect(f.git("rev-parse", "main")).toBe(r.json().commit);
-  expect(f.repositories.get(f.repo.id)).toMatchObject({
-    branch: "refs/heads/main",
-    head: r.json().commit,
-  });
-  expect(f.git("symbolic-ref", "HEAD")).toBe("refs/heads/main");
-  expect(f.git("show", "main:a.txt")).toBe("main");
-  expect(await readFile(join(f.root, "a.txt"), "utf8")).toBe("unstaged a\n");
-  expect(f.git("stash", "list")).toBe("");
-  const continued = await f.switchTo("stash", { confirmed: true });
-  expect(continued.statusCode, continued.body).toBe(200);
 });
 
 test("ignored files that target would overwrite are preserved and Git refusal does not change HEAD", async () => {

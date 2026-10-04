@@ -1,3 +1,4 @@
+import { lstatSync, realpathSync } from "node:fs";
 import { lstat, realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { Repository } from "../../shared/src/index.js";
@@ -101,6 +102,7 @@ export function putProjectAgentSettings(
 export async function validateStartingFolder(
   repository: Repository,
   input: string,
+  skillRoot = false,
 ): Promise<string> {
   const unavailable = () =>
     Object.assign(
@@ -131,14 +133,113 @@ export async function validateStartingFolder(
       throw unavailable();
     // A nested repository is a different identity even when lexically contained.
     if (
-      (await gitText(input, ["rev-parse", "--show-toplevel"])) !==
+      !skillRoot &&
+      ((await gitText(input, ["rev-parse", "--show-toplevel"])) !==
         repository.root ||
-      (await gitText(input, ["rev-parse", "--absolute-git-dir"])) !==
-        repository.gitDir
+        (await gitText(input, ["rev-parse", "--absolute-git-dir"])) !==
+          repository.gitDir)
     )
       throw unavailable();
     return input;
   } catch {
     throw unavailable();
   }
+}
+
+function folderIdentity(path: string) {
+  try {
+    if (realpathSync(path) !== path) throw new Error("Noncanonical folder");
+    const stat = lstatSync(path, { bigint: true });
+    if (!stat.isDirectory() || stat.isSymbolicLink())
+      throw new Error("Unavailable folder");
+    return JSON.stringify([
+      String(stat.dev),
+      String(stat.ino),
+      String(stat.birthtimeNs),
+    ]);
+  } catch {
+    throw Object.assign(
+      new Error("Selected skill folder changed; choose it again"),
+      { statusCode: 409 },
+    );
+  }
+}
+
+export function admitSkillFolder(
+  store: ReviewStore,
+  repository: Repository,
+  path: string,
+) {
+  const identity = folderIdentity(path);
+  store.db.exec(
+    "CREATE TABLE IF NOT EXISTS project_skill_folders(project_id TEXT NOT NULL,path TEXT NOT NULL,identity TEXT NOT NULL,PRIMARY KEY(project_id,path))",
+  );
+  store.db
+    .prepare(
+      "INSERT INTO project_skill_folders VALUES(?,?,?) ON CONFLICT(project_id,path) DO UPDATE SET identity=excluded.identity",
+    )
+    .run(repository.projectId, path, identity);
+}
+/** Only native-selected canonical roots are admitted, scoped to the project. */
+export function skillFolderRepository(
+  store: ReviewStore,
+  repository: Repository,
+  input: string,
+): Repository {
+  if (
+    typeof input !== "string" ||
+    !isAbsolute(input) ||
+    input.length > 4096 ||
+    /[\x00-\x1f\x7f]/.test(input) ||
+    resolve(input) !== input ||
+    input.split(/[\\/]/).some((part) => part === "." || part === "..")
+  )
+    throw Object.assign(new Error("Invalid skill starting folder"), {
+      statusCode: 409,
+    });
+  const rel = relative(repository.root, input);
+  if (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
+    return repository;
+  store.db.exec(
+    "CREATE TABLE IF NOT EXISTS project_skill_folders(project_id TEXT NOT NULL,path TEXT NOT NULL,identity TEXT NOT NULL,PRIMARY KEY(project_id,path))",
+  );
+  const roots = store.db
+    .prepare(
+      "SELECT path,identity FROM project_skill_folders WHERE project_id=?",
+    )
+    .all(repository.projectId) as { path: string; identity: string }[];
+  // Specificity is explicit; SQLite row order must not determine authorization.
+  roots.sort(
+    (a, b) => b.path.length - a.path.length || a.path.localeCompare(b.path),
+  );
+  let matchedAdmission = false;
+  for (const root of roots) {
+    const child = relative(root.path, input);
+    if (child === ".." || child.startsWith(`..${sep}`) || isAbsolute(child))
+      continue;
+    matchedAdmission = true;
+    try {
+      if (folderIdentity(root.path) !== root.identity) continue;
+      return { ...repository, root: root.path };
+    } catch {
+      // A stale overlapping admission must not block another valid root.
+      continue;
+    }
+  }
+  throw Object.assign(
+    new Error(
+      matchedAdmission
+        ? "Selected skill folder changed; choose it again"
+        : "Choose this skill folder using the native folder dialog first",
+    ),
+    { statusCode: 409 },
+  );
+}
+export async function validateSkillStartingFolder(
+  store: ReviewStore,
+  repository: Repository,
+  input: string,
+) {
+  const scoped = skillFolderRepository(store, repository, input);
+  return validateStartingFolder(scoped, input, scoped.root !== repository.root);
 }

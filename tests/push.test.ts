@@ -1,7 +1,8 @@
+import { canonicalMkdtemp as mkdtemp } from "./filesystem-fixtures.js";
 import { afterEach, expect, test } from "vitest";
 import Fastify from "fastify";
 import cookie from "@fastify/cookie";
-import { mkdtemp, writeFile, readFile, rm } from "node:fs/promises";
+import { writeFile, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFile, execFileSync } from "node:child_process";
@@ -464,24 +465,26 @@ test("comparison plans refuse missing, symbolic, excluded and ambiguous tracking
   expect(f.calls).toHaveLength(0);
 });
 
-test("URL-scoped redirect overrides are refused before Push inspection and false aliases remain supported", async () => {
-  const f = await fixture();
-  const key = "http.https://push.example.test/.followRedirects";
-  for (const value of ["true", "initial", "unknown", ""]) {
-    f.git("config", key, value);
+for (const value of ["true", "initial", "unknown", ""]) {
+  test(`URL-scoped redirect override ${JSON.stringify(value)} is refused before Push inspection`, async () => {
+    const f = await fixture();
+    f.git("config", "http.https://push.example.test/.followRedirects", value);
     const result = await f.preview();
     expect(result.statusCode, result.body).toBe(400);
     expect(result.json().error).toMatch(/redirect/i);
     expect(result.body).not.toMatch(/secret|hidden|user:/);
     expect(f.calls).toHaveLength(0);
-  }
-  for (const value of ["false", "no", "off", "0", "FALSE"]) {
-    f.git("config", key, value);
+  });
+}
+for (const value of ["false", "no", "off", "0", "FALSE"]) {
+  test(`URL-scoped false redirect alias ${value} remains supported without Push transport`, async () => {
+    const f = await fixture();
+    f.git("config", "http.https://push.example.test/.followRedirects", value);
     const result = await f.preview();
     expect(result.statusCode, result.body).toBe(200);
-  }
-  expect(f.calls.filter((c) => c.args.includes("push"))).toHaveLength(0);
-});
+    expect(f.calls.filter((c) => c.args.includes("push"))).toHaveLength(0);
+  });
+}
 
 test("adding a URL-scoped redirect override invalidates confirmation before another remote inspection", async () => {
   const f = await fixture();

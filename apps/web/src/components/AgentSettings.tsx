@@ -32,6 +32,7 @@ export default function AgentSettings({
   const [query, setQuery] = useState("");
   const [folders, setFolders] = useState<AgentFoldersResponse | null>(null);
   const [choosing, setChoosing] = useState(false);
+  const [nativeChoosing, setNativeChoosing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [skillsLoading, setSkillsLoading] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -51,6 +52,7 @@ export default function AgentSettings({
     setSkills([]);
     setFolders(null);
     setChoosing(false);
+    setNativeChoosing(false);
     setError("");
     setNotice("");
     setLoading(true);
@@ -121,6 +123,27 @@ export default function AgentSettings({
         setError((e as Error).message);
     }
   }
+  async function chooseNative() {
+    const g = generation.current;
+    setNativeChoosing(true);
+    setError("");
+    try {
+      const result = await api<{ path: string | null }>(
+        `${prefix}/agent-folder-picker`,
+        "POST",
+        { reviewId },
+      );
+      if (g === generation.current && result.path) {
+        setFolder(result.path);
+        setSkill(null);
+        setNotice("");
+      }
+    } catch (error) {
+      if (g === generation.current) setError((error as Error).message);
+    } finally {
+      if (g === generation.current) setNativeChoosing(false);
+    }
+  }
   async function save() {
     if (!saved || busy) return;
     const g = generation.current;
@@ -140,7 +163,7 @@ export default function AgentSettings({
       if (g === generation.current) {
         setSaved(result);
         setNotice(
-          "Starting folder, agent and exact skill are saved for this project.",
+          "Skill folder, agent and exact skill are saved for this project.",
         );
         onSaved?.(result);
       }
@@ -162,7 +185,7 @@ export default function AgentSettings({
   );
   return (
     <section className="agent-settings" aria-label="Project agent settings">
-      <label htmlFor="agent-starting-folder">Starting folder</label>
+      <label htmlFor="agent-starting-folder">Skill folder</label>
       <div className="agent-folder-control">
         <input
           id="agent-starting-folder"
@@ -171,19 +194,25 @@ export default function AgentSettings({
           placeholder="Loading project…"
         />
         <button
-          onClick={() => void browse()}
-          disabled={loading || busy || readOnly}
+          onClick={() => void chooseNative()}
+          disabled={loading || busy || readOnly || nativeChoosing}
         >
-          Choose folder…
+          {nativeChoosing ? "Choosing folder…" : "Choose folder…"}
+        </button>
+        <button
+          onClick={() => void browse()}
+          disabled={loading || busy || readOnly || nativeChoosing}
+        >
+          Browse project folder…
         </button>
       </div>
       <small>
-        Project skills are discovered from this folder. Execution stays inside
-        this review worktree.
+        Project skills are discovered from this folder. The native chooser can
+        select a different folder. Agents execute in the reviewed worktree.
       </small>
       {choosing && (
         <fieldset className="agent-folder-picker">
-          <legend>Choose starting folder</legend>
+          <legend>Choose skill folder</legend>
           {folders ? (
             <>
               <p>{folders.path}</p>
@@ -355,7 +384,8 @@ export default function AgentSettings({
             busy ||
             readOnly ||
             !exact ||
-            choosing
+            choosing ||
+            nativeChoosing
           }
           onClick={() => void save()}
         >

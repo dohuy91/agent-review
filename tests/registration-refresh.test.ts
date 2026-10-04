@@ -1,5 +1,6 @@
+import { canonicalMkdtemp as mkdtemp } from "./filesystem-fixtures.js";
 import { test, expect, afterEach } from "vitest";
-import { mkdtemp, mkdir, writeFile, rename, rm } from "node:fs/promises";
+import { mkdir, writeFile, rename, rm } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";

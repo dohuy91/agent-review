@@ -122,7 +122,7 @@ function Code({
         EditorView.editable.of(false),
         EditorView.decorations.of(Decoration.set(decorations, true)),
         EditorView.theme({
-          "&": { fontSize: "12px" },
+          "&": { fontSize: "15px" },
           ".cm-content": {
             padding: "0",
             fontFamily: "SFMono-Regular,Consolas,monospace",

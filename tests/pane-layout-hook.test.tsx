@@ -51,7 +51,7 @@ test("resize bounds preserve the diff and shrinking the window retains remembere
   expect(result.current.widths.left).toBe(420);
   expect(result.current.preferredWidths.left).toBe(420);
   act(() => result.current.resetPane("left"));
-  expect(result.current.preferredWidths.left).toBe(205);
+  expect(result.current.preferredWidths.left).toBe(350);
 });
 
 test("700px and 900px widths use rails and ignore desktop resizing", async () => {

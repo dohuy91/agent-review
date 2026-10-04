@@ -15,6 +15,8 @@ import { createApp } from "../apps/server/src/app.js";
 import { parseCLI } from "../apps/server/src/cli.js";
 import { execFileSync } from "node:child_process";
 
+// Linux /proc/self/fd supports anchored descendants; Darwin /dev/fd does not.
+const descriptorTest = test.skipIf(process.platform !== "linux");
 const fixtures: string[] = [];
 const apps: Awaited<ReturnType<typeof createApp>>[] = [];
 afterEach(async () => {
@@ -74,45 +76,48 @@ async function setup(options: Record<string, unknown> = {}) {
       }),
   };
 }
-test("directory browser lists only visible real directories and does not register them", async () => {
-  const root = await fixture();
-  for (const name of [
-    "first",
-    "second",
-    ".git",
-    ".private",
-    "node_modules",
-    "$RECYCLE.BIN",
-  ])
-    await mkdir(join(root, name));
-  await writeFile(join(root, "secret.txt"), "not directory data");
-  const { app, headers, rootsResponse, roots, list } = await setup({
-    browseRoots: [root],
-  });
-  expect(rootsResponse.statusCode).toBe(200);
-  expect(rootsResponse.headers["cache-control"]).toBe("no-store");
-  expect(roots).toHaveLength(1);
-  expect(roots[0]).toMatchObject({ path: root });
-  const response = await list(roots[0]!.id);
-  expect(response.statusCode).toBe(200);
-  expect(response.headers["cache-control"]).toBe("no-store");
-  expect(response.json()).toMatchObject({
-    path: root,
-    relativePath: "",
-    entries: [
-      { name: "first", relativePath: "first" },
-      { name: "second", relativePath: "second" },
-    ],
-    nextCursor: null,
-  });
-  expect(response.body).not.toMatch(
-    /secret|not directory data|\.git|\.private|node_modules|RECYCLE/,
-  );
-  expect(
-    (await app.inject({ url: "/api/repositories", headers })).json()
-      .repositories,
-  ).toEqual([]);
-});
+descriptorTest(
+  "directory browser lists only visible real directories and does not register them",
+  async () => {
+    const root = await fixture();
+    for (const name of [
+      "first",
+      "second",
+      ".git",
+      ".private",
+      "node_modules",
+      "$RECYCLE.BIN",
+    ])
+      await mkdir(join(root, name));
+    await writeFile(join(root, "secret.txt"), "not directory data");
+    const { app, headers, rootsResponse, roots, list } = await setup({
+      browseRoots: [root],
+    });
+    expect(rootsResponse.statusCode).toBe(200);
+    expect(rootsResponse.headers["cache-control"]).toBe("no-store");
+    expect(roots).toHaveLength(1);
+    expect(roots[0]).toMatchObject({ path: root });
+    const response = await list(roots[0]!.id);
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["cache-control"]).toBe("no-store");
+    expect(response.json()).toMatchObject({
+      path: root,
+      relativePath: "",
+      entries: [
+        { name: "first", relativePath: "first" },
+        { name: "second", relativePath: "second" },
+      ],
+      nextCursor: null,
+    });
+    expect(response.body).not.toMatch(
+      /secret|not directory data|\.git|\.private|node_modules|RECYCLE/,
+    );
+    expect(
+      (await app.inject({ url: "/api/repositories", headers })).json()
+        .repositories,
+    ).toEqual([]);
+  },
+);
 test("directory endpoints retain authentication, Host, Origin and same-origin restrictions", async () => {
   const root = await fixture();
   const { app, headers, roots } = await setup({ browseRoots: [root] });
@@ -158,7 +163,10 @@ test("rejects traversal, absolute paths, hidden paths, unknown roots, symlinks a
   await writeFile(join(root, "file.txt"), "private");
   await symlink(outside, join(root, "outside-link"), "dir");
   await symlink(join(root, "inside"), join(root, "inside-link"), "dir");
-  const { roots, list, app, headers } = await setup({ browseRoots: [root] });
+  const { roots, list, app, headers } = await setup({
+    browseRoots: [root],
+    container: true,
+  });
   expect(roots).toHaveLength(1);
   const id = roots[0]!.id;
   for (const path of [
@@ -178,14 +186,19 @@ test("rejects traversal, absolute paths, hidden paths, unknown roots, symlinks a
   ])
     expect((await list(id, path)).statusCode, path).toBeGreaterThanOrEqual(400);
   expect((await list("not-configured", "")).statusCode).toBe(404);
-  expect((await list(id)).json().entries).toEqual([
-    { name: "inside", relativePath: "inside" },
-  ]);
-  expect((await list(id, "inside")).json()).toMatchObject({
-    path: join(root, "inside"),
-    relativePath: "inside",
-    entries: [],
-  });
+  if (process.platform === "linux") {
+    expect((await list(id)).json().entries).toEqual([
+      { name: "inside", relativePath: "inside" },
+    ]);
+    expect((await list(id, "inside")).json()).toMatchObject({
+      path: join(root, "inside"),
+      relativePath: "inside",
+      entries: [],
+    });
+  } else {
+    expect((await list(id)).statusCode).toBe(403);
+    expect((await list(id, "inside")).statusCode).toBe(403);
+  }
   expect(
     (
       await app.inject({
@@ -203,7 +216,10 @@ test("changed root identity or a retargeted configured symlink fails closed", as
   await mkdir(root);
   await mkdir(other);
   await symlink(root, alias, "dir");
-  const { roots, list } = await setup({ browseRoots: [root, alias] });
+  const { roots, list } = await setup({
+    browseRoots: [root, alias],
+    container: true,
+  });
   expect(roots).toHaveLength(1);
   await rename(root, join(parent, "old-root"));
   await mkdir(root);
@@ -211,7 +227,7 @@ test("changed root identity or a retargeted configured symlink fails closed", as
   const changed = await list(roots[0]!.id);
   expect(changed.statusCode).toBe(403);
   expect(changed.json().error).toMatch(/changed|restart/i);
-  const second = await setup({ browseRoots: [alias] });
+  const second = await setup({ browseRoots: [alias], container: true });
   await rm(alias);
   await symlink(other, alias, "dir");
   expect((await second.list(second.roots[0]!.id)).statusCode).toBe(403);
@@ -228,9 +244,16 @@ test("omits review state and rejects unreadable directories without leaking chil
     const { roots, list } = await setup({
       browseRoots: [root],
       dataDir: privateState,
+      container: true,
     });
     expect(roots).toHaveLength(1);
-    expect((await list(roots[0]!.id)).json().entries).toEqual([]);
+    const listing = await list(roots[0]!.id);
+    if (process.platform === "linux")
+      expect(listing.json().entries).toEqual([]);
+    else {
+      expect(listing.statusCode).toBe(403);
+      expect(listing.body).not.toMatch(/private-child|review-state/);
+    }
     expect((await list(roots[0]!.id, "review-state")).statusCode).toBe(403);
     const response = await list(roots[0]!.id, "denied");
     expect(response.statusCode).toBe(403);
@@ -240,37 +263,39 @@ test("omits review state and rejects unreadable directories without leaking chil
     await chmod(denied, 0o700);
   }
 });
-test("uses bounded pages with explicit limit feedback, and validates cursors", async () => {
-  const root = await fixture();
-  await Promise.all(
-    Array.from({ length: 120 }, (_, index) =>
-      mkdir(join(root, `folder-${String(index).padStart(3, "0")}`)),
-    ),
-  );
-  const { roots, list } = await setup({ browseRoots: [root] });
-  expect(roots).toHaveLength(1);
-  const first = await list(roots[0]!.id),
-    page = first.json();
-  expect(page.entries).toHaveLength(100);
-  expect(page.nextCursor).toBe("100");
-  const next = (await list(roots[0]!.id, "", page.nextCursor)).json();
-  expect(next.entries).toHaveLength(20);
-  expect(next.nextCursor).toBeNull();
-  expect(
-    new Set([...page.entries, ...next.entries].map((entry) => entry.name)).size,
-  ).toBe(120);
-  for (const cursor of ["-1", "01", "1.5", "50000", "NaN"])
-    expect((await list(roots[0]!.id, "", cursor)).statusCode).toBe(400);
-  await Promise.all(
-    Array.from({ length: 2001 }, (_, index) =>
-      writeFile(join(root, `file-${index}`), ""),
-    ),
-  );
-  const limited = (await list(roots[0]!.id)).json();
-  expect(limited.truncated).toBe(true);
-  expect(limited.message).toMatch(/limit|many/i);
-  expect(limited.entries.length).toBeLessThanOrEqual(100);
-});
+descriptorTest(
+  "uses bounded pages with explicit limit feedback, and validates cursors",
+  async () => {
+    const root = await fixture();
+    await Promise.all(
+      Array.from({ length: 120 }, (_, index) =>
+        mkdir(join(root, `folder-${String(index).padStart(3, "0")}`)),
+      ),
+    );
+    const { roots, list } = await setup({ browseRoots: [root] });
+    expect(roots).toHaveLength(1);
+    const first = await list(roots[0]!.id),
+      page = first.json();
+    expect(page.entries).toHaveLength(100);
+    expect(page.nextCursor).toBe("100");
+    const next = (await list(roots[0]!.id, "", page.nextCursor)).json();
+    expect(next.entries).toHaveLength(20);
+    expect(next.nextCursor).toBeNull();
+    expect(
+      new Set([...page.entries, ...next.entries].map((entry) => entry.name))
+        .size,
+    ).toBe(120);
+    await Promise.all(
+      Array.from({ length: 2001 }, (_, index) =>
+        writeFile(join(root, `file-${index}`), ""),
+      ),
+    );
+    const limited = (await list(roots[0]!.id)).json();
+    expect(limited.truncated).toBe(true);
+    expect(limited.message).toMatch(/limit|many/i);
+    expect(limited.entries.length).toBeLessThanOrEqual(100);
+  },
+);
 test("native default allows siblings, while containers default only to the launched repository", async () => {
   const parent = await fixture(),
     repo = join(parent, "repo"),
@@ -290,18 +315,28 @@ test("native default allows siblings, while containers default only to the launc
   ]);
   await mkdir(sibling);
   const native = await setup({ repositoryPath: repo });
-  expect(native.roots).toHaveLength(1);
-  expect(native.roots[0]!.path).toBe(parent);
-  expect(
-    (await native.list(native.roots[0]!.id))
-      .json()
-      .entries.map((entry: { name: string }) => entry.name),
-  ).toContain("sibling");
+  if (process.platform === "darwin") {
+    expect(native.rootsResponse.json()).toEqual({
+      roots: [],
+      nativePickerAvailable: true,
+    });
+  } else {
+    expect(native.roots).toHaveLength(1);
+    expect(native.roots[0]!.path).toBe(parent);
+    expect(
+      (await native.list(native.roots[0]!.id))
+        .json()
+        .entries.map((entry: { name: string }) => entry.name),
+    ).toContain("sibling");
+  }
   const container = await setup({ repositoryPath: repo, container: true });
   expect(container.roots.map((root) => root.path)).toEqual([repo]);
-  expect((await container.list(container.roots[0]!.id)).json().entries).toEqual(
-    [],
-  );
+  const listing = await container.list(container.roots[0]!.id);
+  if (process.platform === "linux") expect(listing.json().entries).toEqual([]);
+  else {
+    expect(listing.statusCode).toBe(403);
+    expect(listing.body).not.toContain("sibling");
+  }
   const unconfigured = await setup({ container: true });
   expect(unconfigured.roots).toEqual([]);
   expect(unconfigured.rootsResponse.json().message).toMatch(/--browse-root/);
@@ -348,8 +383,13 @@ test("implicit native browsing never exposes the shared temporary parent", async
     "-m",
     "fixture",
   ]);
-  const { roots } = await setup({ repositoryPath: root });
-  expect(roots.map((entry) => entry.path)).toEqual([root]);
+  const { roots, rootsResponse } = await setup({ repositoryPath: root });
+  if (process.platform === "darwin") {
+    expect(rootsResponse.json()).toEqual({
+      roots: [],
+      nativePickerAvailable: true,
+    });
+  } else expect(roots.map((entry) => entry.path)).toEqual([root]);
 });
 
 test("nested ancestor symlinks and lookalike sibling prefixes cannot escape the configured root", async () => {
@@ -360,7 +400,7 @@ test("nested ancestor symlinks and lookalike sibling prefixes cannot escape the 
   await mkdir(outside);
   await mkdir(join(outside, "nested"));
   await symlink(outside, join(root, "alias"), "dir");
-  const { roots, list } = await setup({ browseRoots: [root] });
+  const { roots, list } = await setup({ browseRoots: [root], container: true });
   for (const path of ["alias/nested", "../project-private/nested"])
     expect((await list(roots[0]!.id, path)).statusCode).toBeGreaterThanOrEqual(
       400,
@@ -369,7 +409,12 @@ test("nested ancestor symlinks and lookalike sibling prefixes cannot escape the 
 
 test("missing folders and malformed listing queries return useful errors without cached data", async () => {
   const root = await fixture();
-  const { roots, list, app, headers } = await setup({ browseRoots: [root] });
+  const { roots, list, app, headers } = await setup({
+    browseRoots: [root],
+    container: true,
+  });
+  for (const cursor of ["-1", "01", "1.5", "50000", "NaN"])
+    expect((await list(roots[0]!.id, "", cursor)).statusCode).toBe(400);
   const missing = await list(roots[0]!.id, "removed");
   expect(missing.statusCode).toBe(404);
   expect(missing.json().error).toMatch(/no longer available/);
@@ -393,3 +438,28 @@ test("missing folders and malformed listing queries return useful errors without
   });
   expect(unauthenticated.headers["cache-control"]).toBe("no-store");
 });
+
+test.skipIf(process.platform !== "darwin")(
+  "Darwin native picker hides configured roots and container listing fails closed without leaking names",
+  async () => {
+    const root = await fixture();
+    await mkdir(join(root, "private-child-name"));
+    const native = await setup({ browseRoots: [root] });
+    expect(native.rootsResponse.statusCode).toBe(200);
+    expect(native.rootsResponse.json()).toEqual({
+      roots: [],
+      nativePickerAvailable: true,
+    });
+    const container = await setup({ browseRoots: [root], container: true });
+    expect(container.rootsResponse.json().nativePickerAvailable).toBe(false);
+    expect(container.roots.map((entry) => entry.path)).toEqual([root]);
+    const denied = await container.list(container.roots[0]!.id);
+    expect(denied.statusCode).toBe(403);
+    expect(denied.json().error).toMatch(
+      /Open directory identity could not be verified/,
+    );
+    expect(denied.json()).not.toHaveProperty("entries");
+    expect(denied.body).not.toContain("private-child-name");
+    expect(denied.headers["cache-control"]).toBe("no-store");
+  },
+);

@@ -1,12 +1,14 @@
+import { canonicalMkdtemp as mkdtemp } from "./filesystem-fixtures.js";
 import { test, expect } from "vitest";
 import {
-  mkdtemp,
   mkdir,
   writeFile,
   chmod,
   readFile,
   rm,
   access,
+  symlink,
+  realpath,
 } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -56,7 +58,18 @@ for (const change of [
       inline: process.env.OPENCODE_CONFIG_CONTENT,
       auth: process.env.FIXTURE_AUTH_SETTING,
     };
-    process.env.PATH = bin + ":" + (previous.PATH ?? "");
+    // Keep real providers off PATH: removing the fixture must mean unavailable,
+    // even on developer machines with another OpenCode installation.
+    let gitExecutable: string | undefined;
+    for (const folder of (previous.PATH ?? "").split(":")) {
+      try {
+        gitExecutable = await realpath(join(folder, "git"));
+        break;
+      } catch { /* Continue resolving the fixture prerequisite. */ }
+    }
+    if (!gitExecutable) throw new Error("Git is required for this fixture");
+    await symlink(gitExecutable, join(bin, "git"));
+    process.env.PATH = bin;
     process.env.OPENCODE_CONFIG_CONTENT =
       '{"provider":{"fixture":{}},"share":"auto"}';
     process.env.FIXTURE_AUTH_SETTING = "preserved";

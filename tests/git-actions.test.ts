@@ -1,9 +1,12 @@
+import {
+  canonicalMkdtemp as mkdtemp,
+  invalidUtf8FilenameUnsupported,
+} from "./filesystem-fixtures.js";
 import { afterEach, expect, test } from "vitest";
 import {
   access,
   chmod,
   mkdir,
-  mkdtemp,
   readFile,
   rm,
   symlink,
@@ -235,7 +238,7 @@ test("discard requires a current explicit preview and confirmation and restores 
     ).statusCode,
   ).toBe(409);
 });
-test("safe added/deleted regular files can stage, unstage, and discard; symlinks cannot", async () => {
+test("deleted regular files can stage, unstage, and discard without losing bytes", async () => {
   const f = await fixture();
   await rm(join(f.root, "b.txt"));
   let r = await f.review();
@@ -259,9 +262,12 @@ test("safe added/deleted regular files can stage, unstage, and discard; symlinks
     ).statusCode,
   ).toBe(200);
   expect(await readFile(join(f.root, "b.txt"), "utf8")).toBe("base b\n");
+});
+test("added regular files can be discarded while symlink mutations are refused", async () => {
+  const f = await fixture();
   await writeFile(join(f.root, "new"), "new\n");
-  r = await f.review();
-  p = await f.post("/discard-preview", { reviewId: r.id, path: "new" });
+  let r = await f.review();
+  const p = await f.post("/discard-preview", { reviewId: r.id, path: "new" });
   expect(
     (
       await f.post("/discard", {
@@ -686,8 +692,10 @@ test("symbolic index and branch ref indirection fail closed and preserve their t
   ).toBe(409);
   expect(await readFile(target)).toEqual(original);
 });
-test("non-round-trippable Git filenames cannot collapse onto a displayed mutation path", async () => {
+test("non-round-trippable Git filenames cannot collapse onto a displayed mutation path", async (context) => {
   const f = await fixture();
+  const unsupported = await invalidUtf8FilenameUnsupported(f.root);
+  if (unsupported) context.skip(unsupported);
   const invalid = Buffer.concat([
     Buffer.from(f.root + "/"),
     Buffer.from([0xff]),
@@ -707,6 +715,61 @@ test("non-round-trippable Git filenames cannot collapse onto a displayed mutatio
   expect(result.statusCode).toBe(400);
   expect(await readFile(join(f.root, ".git/index"))).toEqual(before);
 });
+for (const source of ["index", "HEAD"] as const) {
+  test(`raw ${source} Git path bytes reject displayed-name mutation without physical invalid filenames`, async () => {
+    const f = await fixture();
+    await writeFile(join(f.root, "�.txt"), "displayed path\n");
+    f.git("add", ".");
+    const oid = f.git("rev-parse", "HEAD:a.txt");
+    const rawName = Buffer.concat([Buffer.from([0xff]), Buffer.from(".txt")]);
+    const indexRecord = Buffer.concat([
+      Buffer.from(`100644 ${oid}\t`),
+      rawName,
+      Buffer.from([0]),
+    ]);
+    execFileSync("git", ["-C", f.root, "update-index", "-z", "--index-info"], {
+      input: indexRecord,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    if (source === "HEAD") {
+      const tree = f.git("write-tree");
+      const parent = f.git("rev-parse", "HEAD");
+      const commit = f.git(
+        "commit-tree",
+        tree,
+        "-p",
+        parent,
+        "-m",
+        "raw tree fixture",
+      );
+      f.git("update-ref", "HEAD", commit, parent);
+      const removal = Buffer.concat([
+        Buffer.from(`0 ${"0".repeat(oid.length)}\t`),
+        rawName,
+        Buffer.from([0]),
+      ]);
+      execFileSync(
+        "git",
+        ["-C", f.root, "update-index", "-z", "--index-info"],
+        { input: removal, stdio: ["pipe", "pipe", "pipe"] },
+      );
+    }
+    await writeFile(join(f.root, "�.txt"), "changed displayed path\n");
+    const r = await f.review("full");
+    const before = await readFile(join(f.root, ".git/index"));
+    const result = await f.post("/git", {
+      reviewId: r.id,
+      action: "stage",
+      path: "�.txt",
+    });
+    expect(result.statusCode, result.body).toBe(400);
+    expect(result.json().error).toMatch(/Non-UTF-8|Ambiguous/);
+    expect(await readFile(join(f.root, ".git/index"))).toEqual(before);
+    expect(await readFile(join(f.root, "�.txt"), "utf8")).toBe(
+      "changed displayed path\n",
+    );
+  });
+}
 test("discard restores executable mode even when file bytes match the index", async () => {
   const f = await fixture();
   await chmod(join(f.root, "a.txt"), 0o755);
@@ -921,8 +984,10 @@ test("oversized whole-file stage fails with actionable guidance and unchanged in
   expect(result.json().error).toMatch(/size|large|limit/i);
   expect(await readFile(join(f.root, ".git/index"))).toEqual(before);
 });
-test("invalid HEAD path bytes and duplicate display names fail closed even after index removal", async () => {
+test("invalid HEAD path bytes and duplicate display names fail closed even after index removal", async (context) => {
   const f = await fixture();
+  const unsupported = await invalidUtf8FilenameUnsupported(f.root);
+  if (unsupported) context.skip(unsupported);
   const invalid = Buffer.concat([
     Buffer.from(f.root + "/"),
     Buffer.from([0xff]),

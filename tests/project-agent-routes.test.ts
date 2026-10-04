@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync, spawn } from "node:child_process";
 import Fastify from "fastify";
+import { validateSkillStartingFolder } from "../packages/review/src/project-settings.js";
 import { ReviewStore } from "../packages/review/src/store.js";
 import { registerRepository } from "../apps/server/src/registry.js";
 import { installReviewRoutes } from "../apps/server/src/routes/reviews.js";
@@ -80,6 +81,11 @@ async function fixture() {
   expect(typeof mod.installProjectSettingsRoutes).toBe("function");
   mod.installProjectSettingsRoutes(app, repositories, access, store, {
     skillRoots: [],
+    nativePickerAvailable: true,
+    nativePicker: {
+      choose: async () => ({ path: join(dir, "external") }),
+      cancel: () => {},
+    },
   });
   const call = (method: any, url: string, payload?: any) =>
     app.inject({
@@ -204,8 +210,8 @@ test("explicit project context executes in the confirmed folder with exact skill
     },
   });
   expect(response.statusCode, response.body).toBe(201);
-  expect(f.invocations[0].options.cwd).toBe(f.cwd);
-  expect(f.invocations[0].args).toContain(f.cwd);
+  expect(f.invocations[0].options.cwd).toBe(f.root);
+  expect(f.invocations[0].args).toContain(f.root);
   expect(response.json().execution).toEqual(context.execution);
 });
 for (const mutation of ["settings", "skill", "folder", "adapter"]) {
@@ -300,3 +306,71 @@ for (const mutation of ["branch", "content"] as const) {
     expect(f.invocations).toHaveLength(0);
   });
 }
+
+test("native selected external skill folder persists without moving the reviewed execution target", async () => {
+  const f = await fixture();
+  const outside = join(f.dir, "external");
+  await mkdir(join(outside, ".agents", "skills", "external"), {
+    recursive: true,
+  });
+  await writeFile(
+    join(outside, ".agents", "skills", "external", "SKILL.md"),
+    "External skill",
+  );
+  const query = `skills?reviewId=${f.review.id}&startingFolder=${encodeURIComponent(outside)}`;
+  expect((await f.call("GET", query)).statusCode).toBe(409);
+  const picked = await f.call("POST", "agent-folder-picker", {
+    reviewId: f.review.id,
+  });
+  expect(picked.statusCode, picked.body).toBe(200);
+  const reopened = new ReviewStore(join(f.dir, "state"));
+  try {
+    expect(
+      await validateSkillStartingFolder(reopened, f.repository, outside),
+    ).toBe(outside);
+    const unrelated = { ...f.repository, projectId: "unrelated" };
+    await expect(
+      validateSkillStartingFolder(reopened, unrelated, outside),
+    ).rejects.toThrow(/native folder dialog/);
+  } finally {
+    reopened.close();
+  }
+  const skills = (await f.call("GET", query)).json().skills;
+  expect(skills[0].name).toBe("external");
+  const settings = {
+    ...f.settings,
+    startingFolder: outside,
+    skill: { locator: skills[0].locator, digest: skills[0].digest },
+  };
+  expect(
+    (
+      await f.call("PUT", "project-settings", {
+        reviewId: f.review.id,
+        expectedRevision: 0,
+        settings,
+      })
+    ).statusCode,
+  ).toBe(200);
+  const context = (
+    await f.call("GET", `agent-context?reviewId=${f.review.id}`)
+  ).json();
+  const run = await f.call("POST", "agents", {
+    adapter: "codex",
+    reviewId: f.review.id,
+    commentIds: [f.comment.id],
+    expected: {
+      target: context.target,
+      profile: context.profile,
+      execution: context.execution,
+    },
+  });
+  expect(run.statusCode, run.body).toBe(201);
+  expect(f.invocations[0].options.cwd).toBe(f.root);
+  expect(f.invocations[0].args).toContain(f.root);
+  expect(
+    (await f.call("GET", "project-settings")).json().settings.startingFolder,
+  ).toBe(outside);
+  await rm(outside, { recursive: true });
+  await mkdir(outside);
+  expect((await f.call("GET", query)).statusCode).toBe(409);
+});

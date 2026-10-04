@@ -13,6 +13,8 @@ import { invalid } from "../../../../packages/review/src/anchors.js";
 import {
   getProjectAgentSettings,
   validateStartingFolder,
+  validateSkillStartingFolder,
+  skillFolderRepository,
 } from "../../../../packages/review/src/project-settings.js";
 import {
   startingFolderStamp,
@@ -112,9 +114,14 @@ export function installAgentRoutes(
         new Error("Choose an exact skill in Project Settings"),
         { statusCode: 409 },
       );
-    await validateStartingFolder(repository, startingFolder);
+    await validateSkillStartingFolder(store, repository, startingFolder);
     await projectSkillCatalog(startingFolder, globalRoots).resolve(skill);
-    const folderStamp = await startingFolderStamp(repository, startingFolder);
+    const folderStamp = await startingFolderStamp(
+      skillFolderRepository(store, repository, startingFolder),
+      startingFolder,
+      skillFolderRepository(store, repository, startingFolder).root !==
+        repository.root,
+    );
     if (!isDeepStrictEqual(saved, getProjectAgentSettings(store, repository)))
       throw Object.assign(new Error("Project agent settings changed"), {
         statusCode: 409,
@@ -286,8 +293,10 @@ export function installAgentRoutes(
               adapter: selectedExecution.adapter,
               skill: selectedExecution.skill,
             }) ||
-            startingFolderStampSync(r, selectedExecution.startingFolder) !==
-              selectedExecution.folderStamp
+            startingFolderStampSync(
+              skillFolderRepository(store, r, selectedExecution.startingFolder),
+              selectedExecution.startingFolder,
+            ) !== selectedExecution.folderStamp
           )
             throw conflict();
         }

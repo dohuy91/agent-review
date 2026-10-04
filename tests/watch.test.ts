@@ -1,7 +1,8 @@
+import { canonicalMkdtemp as mkdtemp } from "./filesystem-fixtures.js";
 import chokidar, { type FSWatcher } from "chokidar";
 import { EventEmitter } from "node:events";
 import { test, expect, vi } from "vitest";
-import { mkdtemp, writeFile, mkdir, rm } from "node:fs/promises";
+import { writeFile, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";

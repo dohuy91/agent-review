@@ -8,7 +8,7 @@ export interface PaneBounds {
   max: number;
 }
 
-export const defaultPaneWidths: PaneWidths = { left: 205, right: 270 };
+export const defaultPaneWidths: PaneWidths = { left: 350, right: 350 };
 export const paneWidthLimits: Record<PaneSide, PaneBounds> = {
   left: { min: 160, max: 420 },
   right: { min: 220, max: 520 },

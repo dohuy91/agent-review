@@ -6,7 +6,7 @@ import type {
   SkillMetadata,
   SkillProfile,
 } from "./index.js";
-/** Only this selected worktree's canonical directory is an execution cwd. */
+/** Skill discovery context; agent execution remains in the reviewed worktree. */
 export interface ProjectAgentSettings {
   startingFolder: string;
   adapter: AgentAdapter;

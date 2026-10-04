@@ -163,7 +163,7 @@ export class AgentManager {
       child = startAdapter(
         input.adapter,
         this.factory,
-        context.execution?.startingFolder ?? context.target.worktreeRoot,
+        context.target.worktreeRoot,
         prompt,
       );
     } catch {

@@ -19,7 +19,7 @@ test("older version-one preferences get default pane widths without losing setti
   localStorage.setItem(key, JSON.stringify(original));
   expect(loadPreferences()).toEqual({
     ...original,
-    paneWidths: { left: 205, right: 270 },
+    paneWidths: { left: 350, right: 350 },
   });
 });
 
@@ -42,7 +42,7 @@ test("malformed pane widths fall back individually while numeric widths are boun
   );
   expect(loadPreferences()).toEqual({
     ...original,
-    paneWidths: { left: 205, right: 520 },
+    paneWidths: { left: 350, right: 520 },
   });
   localStorage.setItem(
     key,
@@ -51,7 +51,7 @@ test("malformed pane widths fall back individually while numeric widths are boun
       paneWidths: { left: -4, right: null },
     }),
   );
-  expect(loadPreferences().paneWidths).toEqual({ left: 160, right: 270 });
+  expect(loadPreferences().paneWidths).toEqual({ left: 160, right: 350 });
 });
 
 test("saving an older settings payload preserves already resized pane widths", () => {

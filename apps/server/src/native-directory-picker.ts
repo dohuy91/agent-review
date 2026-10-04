@@ -10,7 +10,7 @@ import { DirectoryBrowseError } from "./directory-browser.js";
 
 // Standard Additions only: no Finder automation, shell commands, or request data.
 const CHOOSE_FOLDER_SCRIPT = `try
-  set chosenFolder to choose folder with prompt "Choose a Git repository for Agent Review"
+  set chosenFolder to choose folder with prompt "Choose a folder for Agent Review"
   return POSIX path of chosenFolder
 on error number -128
   return ""
@@ -161,3 +161,5 @@ export class NativeDirectoryPicker {
     }
   }
 }
+
+export const nativeDirectoryPicker = new NativeDirectoryPicker();

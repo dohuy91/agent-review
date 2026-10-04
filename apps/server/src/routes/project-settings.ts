@@ -1,3 +1,4 @@
+import { nativeDirectoryPicker } from "../native-directory-picker.js";
 import type { FastifyInstance } from "fastify";
 import { opendir, realpath } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -11,6 +12,9 @@ import {
   getProjectAgentSettings,
   putProjectAgentSettings,
   validateStartingFolder,
+  validateSkillStartingFolder,
+  skillFolderRepository,
+  admitSkillFolder,
   validateProjectAgentSettings,
 } from "../../../../packages/review/src/project-settings.js";
 import { projectSkillCatalog } from "../../../../packages/agents/src/skills.js";
@@ -27,6 +31,8 @@ export function installProjectSettingsRoutes(
     skillRoots?: string[];
     container?: boolean;
     queue?: RepositoryQueue;
+    nativePickerAvailable?: boolean;
+    nativePicker?: Pick<typeof nativeDirectoryPicker, "choose" | "cancel">;
   } = {},
 ) {
   const globalRoots =
@@ -46,6 +52,34 @@ export function installProjectSettingsRoutes(
       });
     return context;
   };
+  app.post<{ Params: { id: string }; Body: { reviewId: string } }>(
+    "/api/repositories/:id/agent-folder-picker",
+    async (req, reply) => {
+      reply.header("Cache-Control", "no-store");
+      if (!(
+        options.nativePickerAvailable ??
+        (process.platform === "darwin" && !options.container)
+      ))
+        return reply
+          .code(404)
+          .send({
+            error:
+              "Native folder selection is available on the Mac running Agent Review.",
+          });
+      if (!req.body || Object.keys(req.body).some((k) => k !== "reviewId"))
+        throw invalid();
+      const { repository: repo } = await writable(
+        req.params.id,
+        req.body.reviewId,
+      );
+      const picked = await (
+        options.nativePicker ?? nativeDirectoryPicker
+      ).choose();
+      await writable(req.params.id, req.body.reviewId);
+      if (picked.path) admitSkillFolder(store, repo, picked.path);
+      return picked;
+    },
+  );
   app.get<{ Params: { id: string } }>(
     "/api/repositories/:id/project-settings",
     async (req) => getProjectAgentSettings(store, repository(req.params.id)),
@@ -72,14 +106,22 @@ export function installProjectSettingsRoutes(
           req.params.id,
           body.reviewId,
         );
-        await validateStartingFolder(repo, body.settings.startingFolder);
+        await validateSkillStartingFolder(
+          store,
+          repo,
+          body.settings.startingFolder,
+        );
         if (body.settings.skill)
           await projectSkillCatalog(
             body.settings.startingFolder,
             globalRoots,
           ).resolve(body.settings.skill);
         await writable(req.params.id, body.reviewId);
-        await validateStartingFolder(repo, body.settings.startingFolder);
+        await validateSkillStartingFolder(
+          store,
+          repo,
+          body.settings.startingFolder,
+        );
         return putProjectAgentSettings(
           store,
           repo,
@@ -101,13 +143,13 @@ export function installProjectSettingsRoutes(
     const startingFolder =
       req.query.startingFolder ??
       getProjectAgentSettings(store, repo).settings.startingFolder;
-    await validateStartingFolder(repo, startingFolder);
+    await validateSkillStartingFolder(store, repo, startingFolder);
     const skills = await projectSkillCatalog(
       startingFolder,
       globalRoots,
     ).metadata();
     await writable(req.params.id, req.query.reviewId);
-    await validateStartingFolder(repo, startingFolder);
+    await validateSkillStartingFolder(store, repo, startingFolder);
     return { startingFolder, skills };
   });
   app.get<{
@@ -118,10 +160,12 @@ export function installProjectSettingsRoutes(
       req.params.id,
       req.query.reviewId,
     );
-    const path = await validateStartingFolder(
+    const path = await validateSkillStartingFolder(
+      store,
       repo,
       req.query.path ?? repo.root,
     );
+    const folderRoot = skillFolderRepository(store, repo, path).root;
     const folders: AgentFoldersResponse["folders"] = [];
     let visited = 0,
       truncated = false;
@@ -134,7 +178,7 @@ export function installProjectSettingsRoutes(
       if (
         !entry.isDirectory() ||
         entry.isSymbolicLink() ||
-        entry.name === ".git"
+        entry.name.startsWith(".")
       )
         continue;
       const candidate = join(path, entry.name);
@@ -145,12 +189,12 @@ export function installProjectSettingsRoutes(
         /* Raced folders stay unavailable. */
       }
     }
-    await validateStartingFolder(repo, path);
+    await validateSkillStartingFolder(store, repo, path);
     await writable(req.params.id, req.query.reviewId);
     return {
-      root: repo.root,
+      root: folderRoot,
       path,
-      parent: path === repo.root ? null : dirname(path),
+      parent: path === folderRoot ? null : dirname(path),
       folders: folders.sort((a, b) => a.name.localeCompare(b.name)),
       truncated,
     } satisfies AgentFoldersResponse;

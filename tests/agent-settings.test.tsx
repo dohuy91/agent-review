@@ -123,7 +123,7 @@ test("starting folder chooser browses only server-offered folders and re-discove
     });
   });
   fireEvent.click(
-    await screen.findByRole("button", { name: "Choose folder…" }),
+    await screen.findByRole("button", { name: "Browse project folder…" }),
   );
   fireEvent.click(await screen.findByRole("button", { name: "src" }));
   await screen.findByText("/repo/src");
@@ -134,10 +134,10 @@ test("starting folder chooser browses only server-offered folders and re-discove
     ),
   );
   expect(
-    (screen.getByLabelText("Starting folder") as HTMLInputElement).value,
+    (screen.getByLabelText("Skill folder") as HTMLInputElement).value,
   ).toBe("/repo/src");
   expect(
-    (screen.getByLabelText("Starting folder") as HTMLInputElement).readOnly,
+    (screen.getByLabelText("Skill folder") as HTMLInputElement).readOnly,
   ).toBe(true);
 });
 test("changing repositories ignores late settings and skills results", async () => {
@@ -164,7 +164,7 @@ test("changing repositories ignores late settings and skills results", async () 
   view.rerender(<mod.default repositoryId="next" reviewId="review2" />);
   await waitFor(() =>
     expect(
-      (screen.getByLabelText("Starting folder") as HTMLInputElement).value,
+      (screen.getByLabelText("Skill folder") as HTMLInputElement).value,
     ).toBe("/next"),
   );
   resolve(
@@ -175,6 +175,33 @@ test("changing repositories ignores late settings and skills results", async () 
   );
   await Promise.resolve();
   expect(
-    (screen.getByLabelText("Starting folder") as HTMLInputElement).value,
+    (screen.getByLabelText("Skill folder") as HTMLInputElement).value,
   ).toBe("/next");
+});
+
+test("native folder choice discovers external skills and keeps path read-only", async () => {
+  const calls: string[] = [];
+  await renderSettings(async (url: string) => {
+    calls.push(url);
+    if (url.includes("agent-folder-picker"))
+      return response({ path: "/external" });
+    if (url.includes("agent-folders"))
+      return response({ path: "/repo", folders: [], parent: null });
+    if (url === "/api/agents") return response({ agents: [] });
+    if (url.includes("/skills?")) return response({ skills: [project] });
+    return response({
+      revision: 0,
+      settings: { startingFolder: "/repo", adapter: "codex", skill: null },
+    });
+  });
+  await screen.findByText("Review fixes");
+  fireEvent.click(screen.getByRole("button", { name: "Choose folder…" }));
+  await waitFor(() =>
+    expect(
+      (screen.getByLabelText("Skill folder") as HTMLInputElement).value,
+    ).toBe("/external"),
+  );
+  expect(calls.some((url) => url.includes("startingFolder=%2Fexternal"))).toBe(
+    true,
+  );
 });

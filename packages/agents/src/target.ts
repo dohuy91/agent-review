@@ -55,12 +55,13 @@ export async function executionStamp(repository: Repository): Promise<string> {
 export async function startingFolderStamp(
   repository: Repository,
   input: string,
+  skillRoot = false,
 ): Promise<string> {
   const { validateStartingFolder } =
     await import("../../review/src/project-settings.js");
   const { lstat } = await import("node:fs/promises");
   const { relative, join, sep } = await import("node:path");
-  const folder = await validateStartingFolder(repository, input);
+  const folder = await validateStartingFolder(repository, input, skillRoot);
   const hash = createHash("sha256").update(folder);
   const rel = relative(repository.root, folder);
   const paths = [repository.root];
@@ -84,7 +85,7 @@ export async function startingFolderStamp(
     identities.push(identity);
     hash.update(identity);
   }
-  await validateStartingFolder(repository, folder);
+  await validateStartingFolder(repository, folder, skillRoot);
   for (let i = 0; i < paths.length; i++) {
     const stat = await lstat(paths[i], { bigint: true });
     if (

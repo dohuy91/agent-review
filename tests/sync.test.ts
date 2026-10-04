@@ -1,6 +1,6 @@
+import { canonicalMkdtemp as mkdtemp } from "./filesystem-fixtures.js";
 import { afterEach, expect, test, vi } from "vitest";
 import {
-  mkdtemp,
   writeFile,
   readFile,
   rm,

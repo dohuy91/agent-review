@@ -375,13 +375,13 @@ test("desktop pane controls persist widths without losing appearance settings an
     name: "Resize changed files pane",
   });
   fireEvent.keyDown(left, { key: "ArrowRight" });
-  expect(left.getAttribute("aria-valuenow")).toBe("215");
+  expect(left.getAttribute("aria-valuenow")).toBe("360");
   fireEvent.click(screen.getByRole("button", { name: "Split" }));
   chooseTheme("dark");
   const saved = JSON.parse(
     localStorage.getItem("agent-review.preferences.v1")!,
   );
-  expect(saved.paneWidths).toEqual({ left: 215, right: 270 });
+  expect(saved.paneWidths).toEqual({ left: 360, right: 350 });
   cleanup();
   render(<App />);
   await screen.findByRole("button", { name: "old line 1" });
@@ -389,7 +389,7 @@ test("desktop pane controls persist widths without losing appearance settings an
     screen
       .getByRole("separator", { name: "Resize changed files pane" })
       .getAttribute("aria-valuenow"),
-  ).toBe("215");
+  ).toBe("360");
   expect(document.documentElement.dataset.theme).toBe("dark");
   vi.stubGlobal("innerWidth", 700);
   fireEvent(window, new Event("resize"));

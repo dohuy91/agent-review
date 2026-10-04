@@ -359,6 +359,8 @@ export default function AgentPanel({
         </h2>
         <p>
           {confirmation.request.adapter} · {confirmation.providerLabel} ·{" "}
+          execution folder {confirmation.request.expected.target.worktreeRoot} ·
+          skill folder{" "}
           {confirmation.request.expected.execution?.startingFolder ??
             confirmation.request.expected.target.worktreeRoot}{" "}
           · project {confirmation.request.expected.target.projectId} ·{" "}

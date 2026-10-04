@@ -6,6 +6,7 @@ import {
   rm,
   symlink,
   realpath,
+  rename,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -149,3 +150,48 @@ test("folder execution stamp changes when a chosen directory is replaced and rej
   await symlink(join(f.dir, "state"), cwd);
   await expect(mod.startingFolderStamp(f.repository, cwd)).rejects.toThrow();
 });
+
+test("a newly admitted descendant remains usable after its admitted ancestor is replaced", async () => {
+  const f = await fixture();
+  const ancestor = join(f.dir, "external"),
+    descendant = join(ancestor, "skills");
+  await mkdir(descendant, { recursive: true });
+  f.mod.admitSkillFolder(f.store, f.repository, ancestor);
+  await rename(ancestor, join(f.dir, "old-external"));
+  await mkdir(descendant, { recursive: true });
+  f.mod.admitSkillFolder(f.store, f.repository, descendant);
+  expect(
+    f.mod.skillFolderRepository(f.store, f.repository, descendant).root,
+  ).toBe(descendant);
+  await expect(
+    f.mod.validateSkillStartingFolder(f.store, f.repository, descendant),
+  ).resolves.toBe(descendant);
+  await rename(descendant, join(ancestor, "old-skills"));
+  await mkdir(descendant);
+  expect(() =>
+    f.mod.skillFolderRepository(f.store, f.repository, descendant),
+  ).toThrow();
+});
+for (const reverse of [false, true]) {
+  test(`overlapping native admissions choose the most specific valid root regardless of insertion order: ${reverse}`, async () => {
+    const f = await fixture();
+    const ancestor = join(f.dir, "external"),
+      descendant = join(ancestor, "skills");
+    await mkdir(descendant, { recursive: true });
+    for (const root of reverse
+      ? [descendant, ancestor]
+      : [ancestor, descendant])
+      f.mod.admitSkillFolder(f.store, f.repository, root);
+    expect(
+      f.mod.skillFolderRepository(f.store, f.repository, descendant).root,
+    ).toBe(descendant);
+    await rename(descendant, join(ancestor, "old-skills"));
+    await mkdir(descendant);
+    expect(
+      f.mod.skillFolderRepository(f.store, f.repository, descendant).root,
+    ).toBe(ancestor);
+    await expect(
+      f.mod.validateSkillStartingFolder(f.store, f.repository, descendant),
+    ).resolves.toBe(descendant);
+  });
+}

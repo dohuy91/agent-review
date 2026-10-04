@@ -1,4 +1,4 @@
-import { NativeDirectoryPicker } from "../native-directory-picker.js";
+import { nativeDirectoryPicker } from "../native-directory-picker.js";
 import type { FastifyInstance } from "fastify";
 import {
   DirectoryBrowseError,
@@ -8,7 +8,7 @@ export function installDirectoryRoutes(
   app: FastifyInstance,
   browser: DirectoryBrowser,
 ) {
-  const nativePicker = new NativeDirectoryPicker();
+  const nativePicker = nativeDirectoryPicker;
   // The chooser may own a pending HTTP request, so stop it before draining requests.
   app.addHook("preClose", async () => {
     nativePicker.cancel();

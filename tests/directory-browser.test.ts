@@ -87,6 +87,21 @@ test.skipIf(process.platform !== "win32")(
     expect(roots[0]).toMatchObject({ path: root });
   },
 );
+test.skipIf(process.platform !== "win32")(
+  "lists a Windows folder without Linux descriptor aliases",
+  async () => {
+    const root = await fixture();
+    await mkdir(join(root, "child"));
+    const { roots, list } = await setup({ browseRoots: [root] });
+
+    const response = await list(roots[0]!.id);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().entries).toEqual([
+      { name: "child", relativePath: "child" },
+    ]);
+  },
+);
 descriptorTest(
   "directory browser lists only visible real directories and does not register them",
   async () => {

@@ -161,6 +161,22 @@ function unsupportedDescriptorBrowsing() {
   );
 }
 async function openPinnedDirectory(path: string, expected: Stats) {
+  if (platform() === "win32") {
+    let handle: Awaited<ReturnType<typeof opendir>> | undefined;
+    try {
+      handle = await opendir(path);
+      const identity = await lstat(path);
+      if (!sameIdentity(expected, identity) || !readable(identity))
+        throw new DirectoryBrowseError(
+          403,
+          "Folder changed before browsing. Go back and reopen it.",
+        );
+      return { pinned: null, handle, descriptorPath: path };
+    } catch (error) {
+      await handle?.close();
+      throw error;
+    }
+  }
   const descriptorPrefix =
     process.platform === "linux"
       ? "/proc/self/fd"
@@ -439,7 +455,7 @@ export class DirectoryBrowser {
         try {
           await handle.close();
         } finally {
-          await pinned.close();
+          await pinned?.close();
         }
       }
       // Discard the entire result if a root/ancestor changed while enumerating.

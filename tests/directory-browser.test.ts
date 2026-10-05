@@ -76,6 +76,17 @@ async function setup(options: Record<string, unknown> = {}) {
       }),
   };
 }
+test.skipIf(process.platform !== "win32")(
+  "accepts a readable Windows directory without POSIX execute bits",
+  async () => {
+    const root = await fixture();
+    const { rootsResponse, roots } = await setup({ browseRoots: [root] });
+
+    expect(rootsResponse.statusCode).toBe(200);
+    expect(roots).toHaveLength(1);
+    expect(roots[0]).toMatchObject({ path: root });
+  },
+);
 descriptorTest(
   "directory browser lists only visible real directories and does not register them",
   async () => {

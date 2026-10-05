@@ -63,6 +63,7 @@ export async function createApp(options: AppOptions) {
     if (
       !location ||
       (!location.startsWith(".." + "/") &&
+        !location.startsWith(".." + "\\") &&
         location !== ".." &&
         !isAbsolute(location))
     )

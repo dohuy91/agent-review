@@ -84,6 +84,10 @@ test('reject state directories inside reviewed roots and arbitrary persisted com
  const f=await setup();const rejected=await createApp({port:7373,token:'x',dataDir:join(f.root,'.review-state'),repositoryPath:f.root}).then(async app=>{await app.close();return false;},e=>/outside/i.test(e.message));expect(rejected).toBe(true);
  const a=await f.launch();const r=await a.review();expect((await a.call('POST','comments',{reviewId:r.id,path:'a.txt',side:'new',startLine:3,endLine:3,body:'Safe',severity:'info',sourceSnapshot:'private code'})).statusCode).toBe(400);await a.app.close();
 });
+test.skipIf(process.platform !== 'win32')('accepts a state directory outside a Windows repository',async()=>{
+ const f=await setup();const app=await createApp({port:7373,token:'windows-state',dataDir:f.dataDir,repositoryPath:f.root,base:'base'});
+ await app.close();
+});
 test('exact unchanged endpoint preserves location even for duplicate text contexts',async()=>{
  const f=await setup();await writeFile(join(f.root,'a.txt'),'a\nb\nx\ny\nz\na\nb\nx\ny\nz\n');const a=await f.launch();const r=await a.review();
  const created=await a.call('POST','comments',{reviewId:r.id,path:'a.txt',side:'new',startLine:3,endLine:3,body:'First occurrence',severity:'info'});expect(created.statusCode).toBe(201);

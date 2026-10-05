@@ -122,6 +122,9 @@ function sameIdentity(first: Stats, second: Stats) {
   );
 }
 function readable(stats: Stats) {
+  // Windows does not expose POSIX execute bits for directories. The access()
+  // check below remains the authority for whether this process can browse it.
+  if (platform() === "win32") return true;
   // Also fail closed for mode 000 when the launcher happens to run as root.
   return (stats.mode & 0o444) !== 0 && (stats.mode & 0o111) !== 0;
 }
